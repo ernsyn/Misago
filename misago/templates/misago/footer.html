@@ -10,23 +10,30 @@
         </p>
       </noscript>
 
-      {% if misago_settings.terms_of_service or misago_settings.terms_of_service_link or misago_settings.privacy_policy or misago_settings.privacy_policy_link or misago_settings.forum_footnote %}
+      {% if TERMS_OF_SERVICE_URL or PRIVACY_POLICY_URL or settings.forum_footnote or footer_menu %}
         <ul class="list-inline footer-nav">
-        {% if misago_settings.forum_footnote %}
-          <li class="site-footnote">
-            {{ misago_settings.forum_footnote }}
-          </li>
-        {% endif %}
-        {% if misago_settings.terms_of_service or misago_settings.terms_of_service_link %}
-          <li>
-            <a href="{% url 'misago:terms-of-service' %}">{% trans "Terms of service" %}</a>
-          </li>
-        {% endif %}
-        {% if misago_settings.privacy_policy or misago_settings.privacy_policy_link %}
-          <li>
-            <a href="{% url 'misago:privacy-policy' %}">{% trans "Privacy policy" %}</a>
-          </li>
-        {% endif %}
+          {% if settings.forum_footnote %}
+            <li class="site-footnote">
+              {{ settings.forum_footnote }}
+            </li>
+          {% endif %}
+          {% for link in footer_menu %}
+            <li>
+              <a href="{{ link.url }}"{% if link.css_class %} class="{{ link.css_class }}"{% endif %}{% if link.rel %} rel="{{ link.rel }}"{% endif %}{% if link.target_blank %} target="_blank"{% endif %}>
+                {{ link.title }}
+              </a>
+            </li>
+          {% endfor %}
+          {% if TERMS_OF_SERVICE_URL %}
+            <li>
+              <a href="{{ TERMS_OF_SERVICE_URL }}">{% trans "Terms of service" %}</a>
+            </li>
+          {% endif %}
+          {% if PRIVACY_POLICY_URL %}
+            <li>
+              <a href="{{ PRIVACY_POLICY_URL }}">{% trans "Privacy policy" %}</a>
+            </li>
+          {% endif %}
         </ul>
       {% endif %}
 

@@ -1,9 +1,10 @@
 from .treesmap import trees_map
 
 
-class ThreadType(object):
+class ThreadType:
     """Abstract class for thread type strategy"""
-    root_name = 'undefined'
+
+    root_name = "undefined"
 
     def get_forum_name(self, category):
         return category.name
@@ -17,9 +18,6 @@ class ThreadType(object):
     def get_category_last_post_url(self, category):
         return None
 
-    def get_category_read_api_url(self, category):
-        return None
-
     def get_thread_absolute_url(self, thread, page=1):
         return None
 
@@ -27,6 +25,9 @@ class ThreadType(object):
         return None
 
     def get_thread_new_post_url(self, thread):
+        return None
+
+    def get_thread_best_answer_url(self, thread):
         return None
 
     def get_thread_unapproved_post_url(self, thread):

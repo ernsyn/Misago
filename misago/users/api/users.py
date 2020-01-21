@@ -1,30 +1,42 @@
-from rest_framework import status, viewsets
-from rest_framework.decorators import detail_route
-from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
-from rest_framework.response import Response
-
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.db.models import F
 from django.http import Http404
 from django.shortcuts import get_object_or_404
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
+from rest_framework import status, viewsets
+from rest_framework.decorators import action
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework.response import Response
 
-from misago.acl import add_acl
-from misago.categories.models import Category
-from misago.core.rest_permissions import IsAuthenticatedOrReadOnly
-from misago.core.shortcuts import get_int_or_404
-from misago.threads.moderation import hide_post, hide_thread
-from misago.users.bans import get_user_ban
-from misago.users.online.utils import get_user_status
-from misago.users.permissions import (
-    allow_browse_users_list, allow_delete_user, allow_edit_profile_details,
-    allow_follow_user, allow_moderate_avatar, allow_rename_user, allow_see_ban_details)
-from misago.users.profilefields import profilefields, serialize_profilefields_data
-from misago.users.serializers import BanDetailsSerializer, ForumOptionsSerializer, UserSerializer
-from misago.users.viewmodels import Followers, Follows, UserPosts, UserThreads
-
+from ...acl.objectacl import add_acl_to_obj
+from ...categories.models import Category
+from ...core.rest_permissions import IsAuthenticatedOrReadOnly
+from ...core.shortcuts import get_int_or_404
+from ...threads.moderation import hide_post, hide_thread
+from ..bans import get_user_ban
+from ..datadownloads import request_user_data_download, user_has_data_download_request
+from ..deletesrecord import record_user_deleted_by_staff
+from ..online.utils import get_user_status
+from ..permissions import (
+    allow_browse_users_list,
+    allow_delete_user,
+    allow_edit_profile_details,
+    allow_follow_user,
+    allow_moderate_avatar,
+    allow_rename_user,
+    allow_see_ban_details,
+)
+from ..profilefields import profilefields, serialize_profilefields_data
+from ..serializers import (
+    BanDetailsSerializer,
+    DataDownloadSerializer,
+    DeleteOwnAccountSerializer,
+    ForumOptionsSerializer,
+    UserSerializer,
+)
+from ..viewmodels import Followers, Follows, UserPosts, UserThreads
 from .rest_permissions import BasePermission, UnbannedAnonOnly
 from .userendpoints.avatar import avatar_endpoint, moderate_avatar_endpoint
 from .userendpoints.changeemail import change_email_endpoint
@@ -35,13 +47,12 @@ from .userendpoints.list import list_endpoint
 from .userendpoints.signature import signature_endpoint
 from .userendpoints.username import moderate_username_endpoint, username_endpoint
 
-
-UserModel = get_user_model()
+User = get_user_model()
 
 
 class UserViewSetPermission(BasePermission):
     def has_permission(self, request, view):
-        if view.action == 'create':
+        if view.action == "create":
             policy = UnbannedAnonOnly()
         else:
             policy = IsAuthenticatedOrReadOnly()
@@ -56,12 +67,12 @@ def allow_self_only(user, pk, message):
 
 
 class UserViewSet(viewsets.GenericViewSet):
-    permission_classes = (UserViewSetPermission, )
+    permission_classes = (UserViewSetPermission,)
     parser_classes = (FormParser, JSONParser, MultiPartParser)
-    queryset = UserModel.objects
+    queryset = User.objects
 
     def get_queryset(self):
-        relations = ('rank', 'online_tracker', 'ban_cache')
+        relations = ("rank", "online_tracker", "ban_cache")
         return self.queryset.select_related(*relations)
 
     def get_user(self, request, pk):
@@ -71,34 +82,44 @@ class UserViewSet(viewsets.GenericViewSet):
         return user
 
     def list(self, request):
-        allow_browse_users_list(request.user)
+        allow_browse_users_list(request.user_acl)
         return list_endpoint(request)
 
     def create(self, request):
+        if request.settings.enable_sso:
+            raise PermissionDenied(_("Please use the 3rd party site to register."))
+
         return create_endpoint(request)
 
     def retrieve(self, request, pk=None):
         profile = self.get_user(request, pk)
 
-        add_acl(request.user, profile)
-        profile.status = get_user_status(request.user, profile)
+        add_acl_to_obj(request.user_acl, profile)
+        profile.status = get_user_status(request, profile)
 
-        serializer = UserProfileSerializer(profile, context={'user': request.user})
+        serializer = UserProfileSerializer(profile, context={"request": request})
         profile_json = serializer.data
 
         if not profile.is_active:
-            profile_json['is_active'] = False
+            profile_json["is_active"] = False
+        if profile.is_deleting_account:
+            profile_json["is_deleting_account"] = True
 
         return Response(profile_json)
 
-    @detail_route(methods=['get', 'post'])
+    @action(methods=["get", "post"], detail=True)
     def avatar(self, request, pk=None):
         get_int_or_404(pk)
         allow_self_only(request.user, pk, _("You can't change other users avatars."))
 
         return avatar_endpoint(request)
 
-    @detail_route(methods=['post'])
+    @action(
+        methods=["post"],
+        detail=True,
+        url_name="forum-options",
+        url_path="forum-options",
+    )
     def forum_options(self, request, pk=None):
         get_int_or_404(pk)
         allow_self_only(request.user, pk, _("You can't change other users options."))
@@ -106,54 +127,101 @@ class UserViewSet(viewsets.GenericViewSet):
         serializer = ForumOptionsSerializer(request.user, data=request.data)
         if serializer.is_valid():
             serializer.save()
-            return Response({'detail': _("Your forum options have been changed.")})
-        else:
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": _("Your forum options have been changed.")})
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    @detail_route(methods=['get', 'post'])
+    @action(methods=["get", "post"], detail=True)
     def username(self, request, pk=None):
+        if request.settings.enable_sso:
+            raise PermissionDenied(
+                _("Please use the 3rd party site to change your username.")
+            )
+
         get_int_or_404(pk)
         allow_self_only(request.user, pk, _("You can't change other users names."))
 
         return username_endpoint(request)
 
-    @detail_route(methods=['get', 'post'])
+    @action(methods=["get", "post"], detail=True)
     def signature(self, request, pk=None):
         get_int_or_404(pk)
         allow_self_only(request.user, pk, _("You can't change other users signatures."))
 
         return signature_endpoint(request)
 
-    @detail_route(methods=['post'])
+    @action(
+        methods=["post"],
+        detail=True,
+        url_path="change-password",
+        url_name="change-password",
+    )
     def change_password(self, request, pk=None):
+        if request.settings.enable_sso:
+            raise PermissionDenied(
+                _("Please use the 3rd party site to change your password.")
+            )
+
         get_int_or_404(pk)
         allow_self_only(request.user, pk, _("You can't change other users passwords."))
 
         return change_password_endpoint(request)
 
-    @detail_route(methods=['post'])
+    @action(
+        methods=["post"], detail=True, url_path="change-email", url_name="change-email"
+    )
     def change_email(self, request, pk=None):
+        if request.settings.enable_sso:
+            raise PermissionDenied(
+                _("Please use the 3rd party site to change your e-mail.")
+            )
+
         get_int_or_404(pk)
-        allow_self_only(request.user, pk, _("You can't change other users e-mail addresses."))
+        allow_self_only(
+            request.user, pk, _("You can't change other users e-mail addresses.")
+        )
 
         return change_email_endpoint(request)
 
-    @detail_route(methods=['get'])
+    @action(methods=["get"], detail=True)
     def details(self, request, pk=None):
         profile = self.get_user(request, pk)
         data = serialize_profilefields_data(request, profilefields, profile)
         return Response(data)
 
-    @detail_route(methods=['get', 'post'])
+    @action(
+        methods=["get", "post"],
+        detail=True,
+        url_path="edit-details",
+        url_name="edit-details",
+    )
     def edit_details(self, request, pk=None):
         profile = self.get_user(request, pk)
-        allow_edit_profile_details(request.user, profile)
+        allow_edit_profile_details(request.user_acl, profile)
         return edit_details_endpoint(request, profile)
 
-    @detail_route(methods=['post'])
+    @action(
+        methods=["post"],
+        detail=True,
+        url_path="delete-own-account",
+        url_name="delete-own-account",
+    )
+    def delete_own_account(self, request, pk=None):
+        if request.settings.enable_sso:
+            raise PermissionDenied(
+                _("Please use the 3rd party site to delete account.")
+            )
+
+        serializer = DeleteOwnAccountSerializer(
+            data=request.data, context={"user": request.user}
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.mark_account_for_deletion(request)
+        return Response({})
+
+    @action(methods=["post"], detail=True)
     def follow(self, request, pk=None):
         profile = self.get_user(request, pk)
-        allow_follow_user(request.user, profile)
+        allow_follow_user(request.user_acl, profile)
 
         profile_followers = profile.followers
 
@@ -163,67 +231,104 @@ class UserViewSet(viewsets.GenericViewSet):
                 followed = False
 
                 profile_followers -= 1
-                profile.followers = F('followers') - 1
-                request.user.following = F('following') - 1
+                profile.followers = F("followers") - 1
+                request.user.following = F("following") - 1
             else:
                 request.user.follows.add(profile)
                 followed = True
 
                 profile_followers += 1
-                profile.followers = F('followers') + 1
-                request.user.following = F('following') + 1
+                profile.followers = F("followers") + 1
+                request.user.following = F("following") + 1
 
-            profile.save(update_fields=['followers'])
-            request.user.save(update_fields=['following'])
+            profile.save(update_fields=["followers"])
+            request.user.save(update_fields=["following"])
 
-            return Response({'is_followed': followed, 'followers': profile_followers})
+            return Response({"is_followed": followed, "followers": profile_followers})
 
-    @detail_route()
+    @action(detail=True)
     def ban(self, request, pk=None):
         profile = self.get_user(request, pk)
-        allow_see_ban_details(request.user, profile)
+        allow_see_ban_details(request.user_acl, profile)
 
-        ban = get_user_ban(profile)
+        ban = get_user_ban(profile, request.cache_versions)
         if ban:
             return Response(BanDetailsSerializer(ban).data)
-        else:
-            return Response({})
+        return Response({})
 
-    @detail_route(methods=['get', 'post'])
+    @action(
+        methods=["get", "post"],
+        detail=True,
+        url_path="moderate-avatar",
+        url_name="moderate-avatar",
+    )
     def moderate_avatar(self, request, pk=None):
         profile = self.get_user(request, pk)
-        allow_moderate_avatar(request.user, profile)
+        allow_moderate_avatar(request.user_acl, profile)
 
         return moderate_avatar_endpoint(request, profile)
 
-    @detail_route(methods=['get', 'post'])
+    @action(
+        methods=["get", "post"],
+        detail=True,
+        url_path="moderate-username",
+        url_name="moderate-username",
+    )
     def moderate_username(self, request, pk=None):
         profile = self.get_user(request, pk)
-        allow_rename_user(request.user, profile)
+        allow_rename_user(request.user_acl, profile)
 
         return moderate_username_endpoint(request, profile)
 
-    @detail_route(methods=['get', 'post'])
+    @action(
+        methods=["post"],
+        detail=True,
+        url_path="request-data-download",
+        url_name="request-data-download",
+    )
+    def request_data_download(self, request, pk=None):
+        get_int_or_404(pk)
+        allow_self_only(
+            request.user, pk, _("You can't request data downloads for other users.")
+        )
+
+        if not request.settings.allow_data_downloads:
+            raise PermissionDenied(_("You can't download your data."))
+
+        if user_has_data_download_request(request.user):
+            raise PermissionDenied(
+                _(
+                    "You can't have more than one data download request at a single time."
+                )
+            )
+
+        request_user_data_download(request.user)
+
+        return Response({"detail": "ok"})
+
+    @action(methods=["get", "post"], detail=True)
     def delete(self, request, pk=None):
         profile = self.get_user(request, pk)
-        allow_delete_user(request.user, profile)
+        allow_delete_user(request.user_acl, profile)
 
-        if request.method == 'POST':
+        if request.method == "POST":
             with transaction.atomic():
                 profile.lock()
 
-                if request.data.get('with_content'):
+                if request.data.get("with_content"):
                     profile.delete_content()
                 else:
                     categories_to_sync = set()
 
-                    threads = profile.thread_set.select_related('category', 'first_post')
+                    threads = profile.thread_set.select_related(
+                        "category", "first_post"
+                    )
                     for thread in threads.filter(is_hidden=False).iterator():
                         categories_to_sync.add(thread.category_id)
                         hide_thread(request, thread)
 
                     posts = profile.post_set.select_related(
-                        'category', 'thread', 'thread__category'
+                        "category", "thread", "thread__category"
                     )
                     for post in posts.filter(is_hidden=False).iterator():
                         categories_to_sync.add(post.category_id)
@@ -236,83 +341,91 @@ class UserViewSet(viewsets.GenericViewSet):
                         category.synchronize()
                         category.save()
 
-                profile.delete()
+                profile.delete(anonymous_username=request.settings.anonymous_username)
+                record_user_deleted_by_staff()
 
         return Response({})
 
-    @detail_route(methods=['get'])
+    @action(
+        methods=["get"],
+        detail=True,
+        url_path="data-downloads",
+        url_name="data-downloads",
+    )
+    def data_downloads(self, request, pk=None):
+        get_int_or_404(pk)
+        allow_self_only(
+            request.user, pk, _("You can't see other users data downloads.")
+        )
+
+        queryset = request.user.datadownload_set.all()[:5]
+        serializer = DataDownloadSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @action(methods=["get"], detail=True)
     def followers(self, request, pk=None):
         profile = self.get_user(request, pk)
 
-        page = get_int_or_404(request.query_params.get('page', 0))
+        page = get_int_or_404(request.query_params.get("page", 0))
         if page == 1:
             page = 0  # api allows explicit first page
 
-        search = request.query_params.get('search')
+        search = request.query_params.get("search")
 
         users = Followers(request, profile, page, search)
 
         return Response(users.get_frontend_context())
 
-    @detail_route(methods=['get'])
+    @action(methods=["get"], detail=True)
     def follows(self, request, pk=None):
         profile = self.get_user(request, pk)
 
-        page = get_int_or_404(request.query_params.get('page', 0))
+        page = get_int_or_404(request.query_params.get("page", 0))
         if page == 1:
             page = 0  # api allows explicit first page
 
-        search = request.query_params.get('search')
+        search = request.query_params.get("search")
 
         users = Follows(request, profile, page, search)
 
         return Response(users.get_frontend_context())
 
-    @detail_route(methods=['get'])
+    @action(methods=["get"], detail=True)
     def threads(self, request, pk=None):
         profile = self.get_user(request, pk)
-
-        page = get_int_or_404(request.query_params.get('page', 0))
-        if page == 1:
-            page = 0  # api allows explicit first page
-
-        feed = UserThreads(request, profile, page)
-
+        start = get_int_or_404(request.query_params.get("start", 0))
+        feed = UserThreads(request, profile, start)
         return Response(feed.get_frontend_context())
 
-    @detail_route(methods=['get'])
+    @action(methods=["get"], detail=True)
     def posts(self, request, pk=None):
         profile = self.get_user(request, pk)
-
-        page = get_int_or_404(request.query_params.get('page', 0))
-        if page == 1:
-            page = 0  # api allows explicit first page
-
-        feed = UserPosts(request, profile, page)
-
+        start = get_int_or_404(request.query_params.get("start", 0))
+        feed = UserPosts(request, profile, start)
         return Response(feed.get_frontend_context())
 
 
 UserProfileSerializer = UserSerializer.subset_fields(
-    'id',
-    'username',
-    'slug',
-    'email',
-    'joined_on',
-    'rank',
-    'title',
-    'avatars',
-    'is_avatar_locked',
-    'signature',
-    'is_signature_locked',
-    'followers',
-    'following',
-    'threads',
-    'posts',
-    'acl',
-    'is_followed',
-    'is_blocked',
-    'status',
-    'api',
-    'url',
+    "id",
+    "username",
+    "slug",
+    "email",
+    "joined_on",
+    "rank",
+    "title",
+    "avatars",
+    "is_avatar_locked",
+    "signature",
+    "is_signature_locked",
+    "followers",
+    "following",
+    "threads",
+    "posts",
+    "acl",
+    "is_followed",
+    "is_blocked",
+    "real_name",
+    "status",
+    "api",
+    "url",
 )

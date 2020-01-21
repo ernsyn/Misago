@@ -20,7 +20,7 @@ var/
 *.egg
 node_modules/
 
-# OS stuff
+# OS files
 .DS_Store
 thumbs.db
 
@@ -47,31 +47,11 @@ pylint.txt
 .project
 .pydevproject
 
-# Rope
-.ropeproject
+# IDEs
+.idea/
+.vscode/
+*.swp
 
 # Django stuff:
 *.log
 *.pot
-
-# Misago test runner project
-/avatar_store/
-/media/
-/testproject/
-
-# GitBook Documentation
-_book/
-
-# Local development stuff
-dev/
-dev-manage.py
-futuredep/
-venv/
-venv2/
-venv3/
-venv34/
-venv35/
-venv36/
-future-manage.py
-misago-admin.py
-db.sqlite3

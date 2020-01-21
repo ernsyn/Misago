@@ -2,9 +2,8 @@ include LICENSE.rst
 include MANIFEST.in
 include README.rst
 include requirements.txt
-graft docs
-prune docs/build
-prune extras
+prune devproject
+prune docs
 prune testproject
 graft misago
 global-exclude __pycache__

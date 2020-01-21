@@ -11,12 +11,12 @@ from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand
 from django.db import DEFAULT_DB_ALIAS, IntegrityError
 from django.utils.encoding import force_str
-from django.utils.six.moves import input
 
-from misago.users.validators import validate_email, validate_username
+from ....conf.shortcuts import get_dynamic_settings
+from ...setupnewuser import setup_new_user
+from ...validators import validate_email, validate_username
 
-
-UserModel = get_user_model()
+User = get_user_model()
 
 
 class NotRunningInTTYException(Exception):
@@ -24,31 +24,32 @@ class NotRunningInTTYException(Exception):
 
 
 class Command(BaseCommand):
-    help = 'Used to create a superuser.'
+    help = "Used to create a superuser."
 
     def add_arguments(self, parser):
         parser.add_argument(
-            '--username',
-            dest='username',
+            "--username",
+            dest="username",
             default=None,
             help="Specifies the username for the superuser.",
         )
         parser.add_argument(
-            '--email',
-            dest='email',
+            "--email",
+            dest="email",
             default=None,
-            help="Specifies the username for the superuser.",
+            help="Specifies the e-mail for the superuser.",
         )
         parser.add_argument(
-            '--password',
-            dest='password',
+            "--password",
+            dest="password",
             default=None,
-            help="Specifies the username for the superuser.",
+            help="Specifies the password for the superuser.",
         )
         parser.add_argument(
-            '--noinput',
-            action='store_false',
-            dest='interactive',
+            "--noinput",
+            "--no-input",
+            action="store_false",
+            dest="interactive",
             default=True,
             help=(
                 "Tells Misago to NOT prompt the user for input "
@@ -60,31 +61,35 @@ class Command(BaseCommand):
             ),
         )
         parser.add_argument(
-            '--database',
-            action='store',
-            dest='database',
+            "--database",
+            action="store",
+            dest="database",
             default=DEFAULT_DB_ALIAS,
             help=('Specifies the database to use. Default is "default".'),
         )
 
     def execute(self, *args, **options):
-        self.stdin = options.get('stdin', sys.stdin)  # Used for testing
-        return super(Command, self).execute(*args, **options)
+        self.stdin = options.get("stdin", sys.stdin)  # Used for testing
+        return super().execute(*args, **options)
 
-    def handle(self, *args, **options):
-        username = options.get('username')
-        email = options.get('email')
-        password = options.get('password')
-        interactive = options.get('interactive')
-        verbosity = int(options.get('verbosity', 1))
+    def handle(
+        self, *args, **options
+    ):  # pylint: disable=too-many-branches, too-many-locals
+        username = options.get("username")
+        email = options.get("email")
+        password = options.get("password")
+        interactive = options.get("interactive")
+        verbosity = int(options.get("verbosity", 1))
+
+        settings = get_dynamic_settings()
 
         # Validate initial inputs
         if username is not None:
             try:
                 username = username.strip()
-                validate_username(username)
+                validate_username(settings, username)
             except ValidationError as e:
-                self.stderr.write(e.messages[0])
+                self.stderr.write("\n".join(e.messages))
                 username = None
 
         if email is not None:
@@ -92,24 +97,21 @@ class Command(BaseCommand):
                 email = email.strip()
                 validate_email(email)
             except ValidationError as e:
-                self.stderr.write(e.messages[0])
+                self.stderr.write("\n".join(e.messages))
                 email = None
 
         if password is not None:
-            try:
-                password = password.strip()
-                validate_password(password)
-            except ValidationError as e:
-                self.stderr.write(e.messages[0])
-                password = None
+            password = password.strip()
+            if password == "":
+                self.stderr.write("Error: Blank passwords aren't allowed.")
 
         if not interactive:
             if username and email and password:
                 # Call User manager's create_superuser using our wrapper
-                self.create_superuser(username, email, password, verbosity)
+                self.create_superuser(username, email, password, settings, verbosity)
         else:
             try:
-                if hasattr(self.stdin, 'isatty') and not self.stdin.isatty():
+                if hasattr(self.stdin, "isatty") and not self.stdin.isatty():
                     raise NotRunningInTTYException("Not running in a TTY")
 
                 # Prompt for username/password, and any other required fields.
@@ -119,35 +121,45 @@ class Command(BaseCommand):
                     try:
                         message = force_str("Enter displayed username: ")
                         raw_value = input(message).strip()
-                        validate_username(raw_value)
+                        validate_username(settings, raw_value)
                         username = raw_value
                     except ValidationError as e:
-                        self.stderr.write(e.messages[0])
+                        self.stderr.write("\n".join(e.messages))
 
                 while not email:
                     try:
-                        raw_value = input("Enter E-mail address: ").strip()
+                        raw_value = input("Enter e-mail address: ").strip()
                         validate_email(raw_value)
                         email = raw_value
                     except ValidationError as e:
-                        self.stderr.write(e.messages[0])
+                        self.stderr.write("\n".join(e.messages))
 
                 while not password:
+                    raw_value = getpass("Enter password: ")
+                    password_repeat = getpass("Repeat password:")
+                    if raw_value != password_repeat:
+                        self.stderr.write("Error: Your passwords didn't match.")
+                        # Don't validate passwords that don't match.
+                        continue
+                    if raw_value.strip() == "":
+                        self.stderr.write("Error: Blank passwords aren't allowed.")
+                        # Don't validate blank passwords.
+                        continue
                     try:
-                        raw_value = getpass("Enter password: ").strip()
                         validate_password(
-                            raw_value, user=UserModel(username=username, email=email)
+                            raw_value, user=User(username=username, email=email)
                         )
-
-                        repeat_raw_value = getpass("Repeat password: ").strip()
-                        if raw_value != repeat_raw_value:
-                            raise ValidationError("Entered passwords are different.")
-                        password = raw_value
                     except ValidationError as e:
-                        self.stderr.write(e.messages[0])
+                        self.stderr.write("\n".join(e.messages))
+                        response = input(
+                            "Bypass password validation and create user anyway? [y/N]: "
+                        )
+                        if response.lower() != "y":
+                            continue
+                    password = raw_value
 
                 # Call User manager's create_superuser using our wrapper
-                self.create_superuser(username, email, password, verbosity)
+                self.create_superuser(username, email, password, settings, verbosity)
 
             except KeyboardInterrupt:
                 self.stderr.write("\nOperation cancelled.")
@@ -159,15 +171,14 @@ class Command(BaseCommand):
                     "to create one manually."
                 )
 
-    def create_superuser(self, username, email, password, verbosity):
+    def create_superuser(self, username, email, password, settings, verbosity):
         try:
-            user = UserModel.objects.create_superuser(
-                username, email, password, set_default_avatar=True
-            )
+            user = User.objects.create_superuser(username, email, password)
+            setup_new_user(settings, user)
 
             if verbosity >= 1:
-                message = "Superuser #%(pk)s has been created successfully."
-                self.stdout.write(message % {'pk': user.pk})
+                message = "Superuser #%s has been created successfully."
+                self.stdout.write(message % user.pk)
         except ValidationError as e:
             self.stderr.write(e.messages[0])
         except IntegrityError as e:

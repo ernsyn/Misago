@@ -1,20 +1,21 @@
+from django.core.exceptions import PermissionDenied
+from django.utils.translation import gettext as _, ngettext
 from rest_framework import serializers
 from rest_framework.response import Response
 
-from django.core.exceptions import PermissionDenied
-from django.utils.translation import ugettext as _
-
-from misago.acl import add_acl
-from misago.conf import settings
-from misago.core.apipatch import ApiPatch
-from misago.threads.models import PostLike
-from misago.threads.moderation import posts as moderation
-from misago.threads.permissions import (
-    allow_approve_post, allow_hide_post, allow_protect_post, allow_unhide_post)
-from misago.threads.permissions import exclude_invisible_posts
-
-
-PATCH_LIMIT = settings.MISAGO_POSTS_PER_PAGE + settings.MISAGO_POSTS_TAIL
+from ....acl.objectacl import add_acl_to_obj
+from ....conf import settings
+from ....core.apipatch import ApiPatch
+from ...models import PostLike
+from ...moderation import posts as moderation
+from ...permissions import (
+    allow_approve_post,
+    allow_hide_best_answer,
+    allow_hide_post,
+    allow_protect_post,
+    allow_unhide_post,
+    exclude_invisible_posts,
+)
 
 post_patch_dispatcher = ApiPatch()
 
@@ -22,17 +23,16 @@ post_patch_dispatcher = ApiPatch()
 def patch_acl(request, post, value):
     """useful little op that updates post acl to current state"""
     if value:
-        add_acl(request.user, post)
-        return {'acl': post.acl}
-    else:
-        return {'acl': None}
+        add_acl_to_obj(request.user_acl, post)
+        return {"acl": post.acl}
+    return {"acl": None}
 
 
-post_patch_dispatcher.add('acl', patch_acl)
+post_patch_dispatcher.add("acl", patch_acl)
 
 
 def patch_is_liked(request, post, value):
-    if not post.acl['can_like']:
+    if not post.acl["can_like"]:
         raise PermissionDenied(_("You can't like posts in this category."))
 
     # lock user to protect us from likes flood
@@ -47,9 +47,9 @@ def patch_is_liked(request, post, value):
     # no change
     if (value and user_like) or (not value and not user_like):
         return {
-            'likes': post.likes,
-            'last_likes': post.last_likes or [],
-            'is_liked': value,
+            "likes": post.likes,
+            "last_likes": post.last_likes or [],
+            "is_liked": value,
         }
 
     # like
@@ -60,7 +60,6 @@ def patch_is_liked(request, post, value):
             liker=request.user,
             liker_name=request.user.username,
             liker_slug=request.user.slug,
-            liker_ip=request.user_ip,
         )
         post.likes += 1
 
@@ -71,61 +70,55 @@ def patch_is_liked(request, post, value):
 
     post.last_likes = []
     for like in post.postlike_set.all()[:4]:
-        post.last_likes.append({
-            'id': like.liker_id,
-            'username': like.liker_name,
-        })
+        post.last_likes.append({"id": like.liker_id, "username": like.liker_name})
 
-    post.save(update_fields=['likes', 'last_likes'])
+    post.save(update_fields=["likes", "last_likes"])
 
-    return {
-        'likes': post.likes,
-        'last_likes': post.last_likes or [],
-        'is_liked': value,
-    }
+    return {"likes": post.likes, "last_likes": post.last_likes or [], "is_liked": value}
 
 
-post_patch_dispatcher.replace('is-liked', patch_is_liked)
+post_patch_dispatcher.replace("is-liked", patch_is_liked)
 
 
 def patch_is_protected(request, post, value):
-    allow_protect_post(request.user, post)
+    allow_protect_post(request.user_acl, post)
     if value:
         moderation.protect_post(request.user, post)
     else:
         moderation.unprotect_post(request.user, post)
-    return {'is_protected': post.is_protected}
+    return {"is_protected": post.is_protected}
 
 
-post_patch_dispatcher.replace('is-protected', patch_is_protected)
+post_patch_dispatcher.replace("is-protected", patch_is_protected)
 
 
 def patch_is_unapproved(request, post, value):
-    allow_approve_post(request.user, post)
+    allow_approve_post(request.user_acl, post)
 
     if value:
         raise PermissionDenied(_("Content approval can't be reversed."))
 
     moderation.approve_post(request.user, post)
 
-    return {'is_unapproved': post.is_unapproved}
+    return {"is_unapproved": post.is_unapproved}
 
 
-post_patch_dispatcher.replace('is-unapproved', patch_is_unapproved)
+post_patch_dispatcher.replace("is-unapproved", patch_is_unapproved)
 
 
 def patch_is_hidden(request, post, value):
     if value is True:
-        allow_hide_post(request.user, post)
+        allow_hide_post(request.user_acl, post)
+        allow_hide_best_answer(request.user_acl, post)
         moderation.hide_post(request.user, post)
     elif value is False:
-        allow_unhide_post(request.user, post)
+        allow_unhide_post(request.user_acl, post)
         moderation.unhide_post(request.user, post)
 
-    return {'is_hidden': post.is_hidden}
+    return {"is_hidden": post.is_hidden}
 
 
-post_patch_dispatcher.replace('is-hidden', patch_is_hidden)
+post_patch_dispatcher.replace("is-hidden", patch_is_hidden)
 
 
 def post_patch_endpoint(request, post):
@@ -145,11 +138,13 @@ def post_patch_endpoint(request, post):
 
 
 def bulk_patch_endpoint(request, thread):
-    serializer = BulkPatchSerializer(data=request.data)
+    serializer = BulkPatchSerializer(
+        data=request.data, context={"settings": request.settings}
+    )
     if not serializer.is_valid():
         return Response(serializer.errors, status=400)
 
-    posts = clean_posts_for_patch(request, thread, serializer.data['ids'])
+    posts = clean_posts_for_patch(request, thread, serializer.data["ids"])
 
     old_unapproved_posts = [p.is_unapproved for p in posts].count(True)
 
@@ -168,11 +163,12 @@ def bulk_patch_endpoint(request, thread):
 
 
 def clean_posts_for_patch(request, thread, posts_ids):
-    posts_queryset = exclude_invisible_posts(request.user, thread.category, thread.post_set)
-    posts_queryset = posts_queryset.filter(
-        id__in=posts_ids,
-        is_event=False,
-    ).order_by('id')
+    posts_queryset = exclude_invisible_posts(
+        request.user_acl, thread.category, thread.post_set
+    )
+    posts_queryset = posts_queryset.filter(id__in=posts_ids, is_event=False).order_by(
+        "id"
+    )
 
     posts = []
     for post in posts_queryset:
@@ -188,12 +184,20 @@ def clean_posts_for_patch(request, thread, posts_ids):
 
 class BulkPatchSerializer(serializers.Serializer):
     ids = serializers.ListField(
-        child=serializers.IntegerField(min_value=1),
-        max_length=PATCH_LIMIT,
-        min_length=1,
+        child=serializers.IntegerField(min_value=1), min_length=1
     )
     ops = serializers.ListField(
-        child=serializers.DictField(),
-        min_length=1,
-        max_length=10,
+        child=serializers.DictField(), min_length=1, max_length=10
     )
+
+    def validate_ids(self, data):
+        settings = self.context["settings"]
+        limit = settings.posts_per_page + settings.posts_per_page_orphans
+        if len(data) > limit:
+            message = ngettext(
+                "No more than %(limit)s post can be updated at a single time.",
+                "No more than %(limit)s posts can be updated at a single time.",
+                limit,
+            )
+            raise serializers.ValidationError(message % {"limit": limit})
+        return data

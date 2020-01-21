@@ -1,6 +1,3 @@
-# -*- coding: utf-8 -*-
-from __future__ import unicode_literals
-
 from django.db import migrations, models
 
 
@@ -12,17 +9,21 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.CreateModel(
-            name='CacheVersion',
+            name="CacheVersion",
             fields=[
                 (
-                    'id', models.AutoField(
-                        verbose_name='ID', serialize=False, auto_created=True, primary_key=True
-                    )
+                    "id",
+                    models.AutoField(
+                        verbose_name="ID",
+                        serialize=False,
+                        auto_created=True,
+                        primary_key=True,
+                    ),
                 ),
-                ('cache', models.CharField(max_length=128)),
-                ('version', models.PositiveIntegerField(default=0)),
+                ("cache", models.CharField(max_length=128)),
+                ("version", models.PositiveIntegerField(default=0)),
             ],
             options={},
-            bases=(models.Model, ),
-        ),
+            bases=(models.Model,),
+        )
     ]

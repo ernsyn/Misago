@@ -6,7 +6,7 @@
 // Custom header styles
 .modal-header {
   background: @modal-header-bg;
-  border-bottom-color: @modal-header-bg;
+  border-bottom-color: @modal-header-border-color;
   border-radius: @border-radius-large @border-radius-large 0px 0px;
 
   color: @modal-header-color;
@@ -26,7 +26,6 @@
 .modal-message .message-icon {
   color: @message-icon-color;
 }
-
 
 
 // Even out space between form fields
@@ -57,25 +56,15 @@
 
 
 // Register modal
-.modal-register .legal-footnote {
-  text-align: center;
-
-  .material-icon {
-    margin-right: 4px;
-    position: relative;
-    bottom: 1px;
-
-    color: @gray-light;
-    font-size: 28px;
-    line-height: 28px;
+.legal-footnote {
+  label {
+    font-weight: bold;
   }
 
-  a, a:link, a:visited {
-    color: @gray-light;
-  }
+  .help-block {
+    margin-left: 20px;
 
-  a:focus, a:hover, a:active {
-    color: @text-color;
+    color: @brand-danger;
   }
 }
 

@@ -1,48 +1,36 @@
-from __future__ import unicode_literals
-
 import copy
 
-from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.fields import JSONField
+from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVector, SearchVectorField
 from django.db import models
-from django.utils import six, timezone
-from django.utils.encoding import python_2_unicode_compatible
+from django.db.models import Q
+from django.utils import timezone
 
-from misago.conf import settings
-from misago.core.pgutils import PgPartialIndex
-from misago.core.utils import parse_iso8601_string
-from misago.markup import finalise_markup
-from misago.threads.checksums import is_post_valid, update_post_checksum
-from misago.threads.filtersearch import filter_search
+from ...conf import settings
+from ...core.utils import parse_iso8601_string
+from ...markup import finalize_markup
+from ..checksums import is_post_valid, update_post_checksum
+from ..filtersearch import filter_search
 
 
-@python_2_unicode_compatible
 class Post(models.Model):
-    category = models.ForeignKey(
-        'misago_categories.Category',
-        on_delete=models.CASCADE,
-    )
-    thread = models.ForeignKey(
-        'misago_threads.Thread',
-        on_delete=models.CASCADE,
-    )
+    category = models.ForeignKey("misago_categories.Category", on_delete=models.CASCADE)
+    thread = models.ForeignKey("misago_threads.Thread", on_delete=models.CASCADE)
     poster = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        blank=True,
-        null=True,
-        on_delete=models.SET_NULL,
+        settings.AUTH_USER_MODEL, blank=True, null=True, on_delete=models.SET_NULL
     )
     poster_name = models.CharField(max_length=255)
-    poster_ip = models.GenericIPAddressField()
     original = models.TextField()
     parsed = models.TextField()
-    checksum = models.CharField(max_length=64, default='-')
-    mentions = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name="mention_set")
+    checksum = models.CharField(max_length=64, default="-")
+    mentions = models.ManyToManyField(
+        settings.AUTH_USER_MODEL, related_name="mention_set"
+    )
 
     attachments_cache = JSONField(null=True, blank=True)
 
-    posted_on = models.DateTimeField()
+    posted_on = models.DateTimeField(db_index=True)
     updated_on = models.DateTimeField()
     hidden_on = models.DateTimeField(default=timezone.now)
 
@@ -52,7 +40,7 @@ class Post(models.Model):
         blank=True,
         null=True,
         on_delete=models.SET_NULL,
-        related_name='+',
+        related_name="+",
     )
     last_editor_name = models.CharField(max_length=255, null=True, blank=True)
     last_editor_slug = models.SlugField(max_length=255, null=True, blank=True)
@@ -62,7 +50,7 @@ class Post(models.Model):
         blank=True,
         null=True,
         on_delete=models.SET_NULL,
-        related_name='+',
+        related_name="+",
     )
     hidden_by_name = models.CharField(max_length=255, null=True, blank=True)
     hidden_by_slug = models.SlugField(max_length=255, null=True, blank=True)
@@ -82,8 +70,8 @@ class Post(models.Model):
 
     liked_by = models.ManyToManyField(
         settings.AUTH_USER_MODEL,
-        related_name='liked_post_set',
-        through='misago_threads.PostLike',
+        related_name="liked_post_set",
+        through="misago_threads.PostLike",
     )
 
     search_document = models.TextField(null=True, blank=True)
@@ -91,34 +79,48 @@ class Post(models.Model):
 
     class Meta:
         indexes = [
-            PgPartialIndex(
-                fields=['has_open_reports'],
-                where={'has_open_reports': True},
+            models.Index(
+                name="misago_post_has_open_repo_part",
+                fields=["has_open_reports"],
+                condition=Q(has_open_reports=True),
             ),
-            PgPartialIndex(
-                fields=['is_hidden'],
-                where={'is_hidden': False},
+            models.Index(
+                name="misago_post_is_hidden_part",
+                fields=["is_hidden"],
+                condition=Q(is_hidden=False),
             ),
-            GinIndex(fields=['search_vector']),
+            models.Index(
+                name="misago_post_is_event_part",
+                fields=["is_event", "event_type"],
+                condition=Q(is_event=True),
+            ),
+            GinIndex(fields=["search_vector"]),
         ]
 
         index_together = [
-            ('thread', 'id'),  # speed up threadview for team members
-            ('is_event', 'is_hidden'),
-            ('poster', 'posted_on'),
+            ("thread", "id"),  # speed up threadview for team members
+            ("is_event", "is_hidden"),
+            ("poster", "posted_on"),
         ]
 
     def __str__(self):
-        return '%s...' % self.original[10:].strip()
+        return "%s..." % self.original[10:].strip()
 
     def delete(self, *args, **kwargs):
-        from misago.threads.signals import delete_post
+        from ..signals import delete_post
+
         delete_post.send(sender=self)
 
-        super(Post, self).delete(*args, **kwargs)
+        super().delete(*args, **kwargs)
 
     def merge(self, other_post):
-        if not self.poster_id or self.poster_id != other_post.poster_id:
+        if self.poster_id != other_post.poster_id:
+            raise ValueError("post can't be merged with other user's post")
+        elif (
+            self.poster_id is None
+            and other_post.poster_id is None
+            and self.poster_name != other_post.poster_name
+        ):
             raise ValueError("post can't be merged with other user's post")
 
         if self.thread_id != other_post.thread_id:
@@ -130,15 +132,26 @@ class Post(models.Model):
         if self.pk == other_post.pk:
             raise ValueError("post can't be merged with itself")
 
-        other_post.original = six.text_type('\n\n').join((other_post.original, self.original))
-        other_post.parsed = six.text_type('\n').join((other_post.parsed, self.parsed))
+        other_post.original = str("\n\n").join((other_post.original, self.original))
+        other_post.parsed = str("\n").join((other_post.parsed, self.parsed))
         update_post_checksum(other_post)
 
-        from misago.threads.signals import merge_post
+        if self.is_protected:
+            other_post.is_protected = True
+        if self.is_best_answer:
+            self.thread.best_answer = other_post
+        if other_post.is_best_answer:
+            self.thread.best_answer_is_protected = other_post.is_protected
+
+        from ..signals import merge_post
+
         merge_post.send(sender=self, other_post=other_post)
 
     def move(self, new_thread):
-        from misago.threads.signals import move_post
+        from ..signals import move_post
+
+        if self.is_best_answer:
+            self.thread.clear_best_answer()
 
         self.category = new_thread.category
         self.thread = new_thread
@@ -146,21 +159,24 @@ class Post(models.Model):
 
     @property
     def attachments(self):
-        if hasattr(self, '_hydrated_attachments_cache'):
+        # pylint: disable=access-member-before-definition
+        if hasattr(self, "_hydrated_attachments_cache"):
             return self._hydrated_attachments_cache
 
         self._hydrated_attachments_cache = []
         if self.attachments_cache:
             for attachment in copy.deepcopy(self.attachments_cache):
-                attachment['uploaded_on'] = parse_iso8601_string(attachment['uploaded_on'])
+                attachment["uploaded_on"] = parse_iso8601_string(
+                    attachment["uploaded_on"]
+                )
                 self._hydrated_attachments_cache.append(attachment)
 
         return self._hydrated_attachments_cache
 
     @property
     def content(self):
-        if not hasattr(self, '_finalised_parsed'):
-            self._finalised_parsed = finalise_markup(self.parsed)
+        if not hasattr(self, "_finalised_parsed"):
+            self._finalised_parsed = finalize_markup(self.parsed)
         return self._finalised_parsed
 
     @property
@@ -187,25 +203,24 @@ class Post(models.Model):
 
     def set_search_document(self, thread_title=None):
         if thread_title:
-            self.search_document = filter_search('\n\n'.join([thread_title, self.original]))
+            self.search_document = filter_search(
+                "\n\n".join([thread_title, self.original])
+            )
         else:
             self.search_document = filter_search(self.original)
 
     def update_search_vector(self):
         self.search_vector = SearchVector(
-            'search_document',
-            config=settings.MISAGO_SEARCH_CONFIG,
+            "search_document", config=settings.MISAGO_SEARCH_CONFIG
         )
 
     @property
     def short(self):
         if self.is_valid:
             if len(self.original) > 150:
-                return six.text_type('%s...') % self.original[:150].strip()
-            else:
-                return self.original
-        else:
-            return ''
+                return str("%s...") % self.original[:150].strip()
+            return self.original
+        return ""
 
     @property
     def is_valid(self):
@@ -213,4 +228,8 @@ class Post(models.Model):
 
     @property
     def is_first_post(self):
-        return self.pk == self.thread.first_post_id
+        return self.id == self.thread.first_post_id
+
+    @property
+    def is_best_answer(self):
+        return self.id == self.thread.best_answer_id

@@ -1,84 +1,90 @@
-from types import ModuleType
+import pytest
 
-from django.test import TestCase
-from django.utils import six
-
-from misago.acl.providers import PermissionProviders
-from misago.conf import settings
+from ...conf import settings
+from ..providers import PermissionProviders
 
 
-class TestType(object):
-    pass
+def test_providers_are_not_loaded_on_container_init():
+    providers = PermissionProviders()
+
+    assert not providers._initialized
+    assert not providers._providers
+    assert not providers._annotators
+    assert not providers._user_acl_serializers
 
 
-class PermissionProvidersTests(TestCase):
-    def test_initialization(self):
-        """providers manager is lazily initialized"""
-        providers = PermissionProviders()
+def test_container_loads_providers():
+    providers = PermissionProviders()
+    providers.load()
 
-        self.assertTrue(providers._initialized is False)
-        self.assertTrue(not providers._providers)
-        self.assertTrue(not providers._providers_dict)
+    assert providers._providers
+    assert providers._annotators
+    assert providers._user_acl_serializers
 
-        # list call initializes providers
-        providers_list = providers.list()
 
-        self.assertTrue(providers_list)
-        self.assertTrue(providers._initialized)
-        self.assertTrue(providers._providers)
-        self.assertTrue(providers._providers_dict)
+def test_loading_providers_second_time_raises_runtime_error():
+    providers = PermissionProviders()
+    providers.load()
 
-        # dict call initializes providers
-        providers = PermissionProviders()
-        providers_dict = providers.dict()
+    with pytest.raises(RuntimeError):
+        providers.load()
 
-        self.assertTrue(providers_dict)
-        self.assertTrue(providers._initialized)
-        self.assertTrue(providers._providers)
-        self.assertTrue(providers._providers_dict)
 
-    def test_list(self):
-        """providers manager list() returns iterable of tuples"""
-        providers = PermissionProviders()
-        providers_list = providers.list()
+def test_container_returns_list_of_providers():
+    providers = PermissionProviders()
+    providers.load()
 
-        providers_setting = settings.MISAGO_ACL_EXTENSIONS
-        self.assertEqual(len(providers_list), len(providers_setting))
+    providers_setting = settings.MISAGO_ACL_EXTENSIONS
+    assert len(providers.list()) == len(providers_setting)
 
-        for extension, module in providers_list:
-            self.assertTrue(isinstance(extension, six.string_types))
-            self.assertEqual(type(module), ModuleType)
 
-    def test_dict(self):
-        """providers manager dict() returns dict"""
-        providers = PermissionProviders()
-        providers_dict = providers.dict()
+def test_container_returns_dict_of_providers():
+    providers = PermissionProviders()
+    providers.load()
 
-        providers_setting = settings.MISAGO_ACL_EXTENSIONS
-        self.assertEqual(len(providers_dict), len(providers_setting))
+    providers_setting = settings.MISAGO_ACL_EXTENSIONS
+    assert len(providers.dict()) == len(providers_setting)
 
-        for extension, module in providers_dict.items():
-            self.assertTrue(isinstance(extension, six.string_types))
-            self.assertEqual(type(module), ModuleType)
 
-    def test_annotators(self):
-        """its possible to register and get annotators"""
-        providers = PermissionProviders()
+def test_accessing_providers_list_before_load_raises_assertion_error():
+    providers = PermissionProviders()
+    with pytest.raises(AssertionError):
+        providers.list()
 
-        def mock_annotator(*args):
-            pass
 
-        providers.acl_annotator(TestType, mock_annotator)
-        annotators_list = providers.get_type_annotators(TestType())
-        self.assertEqual(annotators_list[0], mock_annotator)
+def test_accessing_providers_dict_before_load_raises_assertion_error():
+    providers = PermissionProviders()
+    with pytest.raises(AssertionError):
+        providers.dict()
 
-    def test_serializers(self):
-        """its possible to register and get annotators"""
-        providers = PermissionProviders()
 
-        def mock_serializer(*args):
-            pass
+def test_getter_returns_registered_type_annotator():
+    class TestType:
+        pass
 
-        providers.acl_serializer(TestType, mock_serializer)
-        serializers_list = providers.get_type_serializers(TestType())
-        self.assertEqual(serializers_list[0], mock_serializer)
+    def test_annotator():
+        pass
+
+    providers = PermissionProviders()
+    providers.acl_annotator(TestType, test_annotator)
+    providers.load()
+
+    assert test_annotator in providers.get_obj_type_annotators(TestType())
+
+
+def test_container_returns_list_of_user_acl_serializers():
+    providers = PermissionProviders()
+    providers.load()
+
+    assert providers.get_user_acl_serializers()
+
+
+def test_getter_returns_registered_user_acl_serializer():
+    def test_user_acl_serializer():
+        pass
+
+    providers = PermissionProviders()
+    providers.user_acl_serializer(test_user_acl_serializer)
+    providers.load()
+
+    assert test_user_acl_serializer in providers.get_user_acl_serializers()

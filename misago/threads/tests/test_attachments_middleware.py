@@ -1,281 +1,302 @@
+from unittest.mock import Mock
+
+import pytest
 from rest_framework import serializers
 
-from misago.acl.testutils import override_acl
-from misago.categories.models import Category
-from misago.conf import settings
-from misago.threads import testutils
-from misago.threads.api.postingendpoint import PostingEndpoint
-from misago.threads.api.postingendpoint.attachments import (
-    AttachmentsMiddleware, validate_attachments_count)
-from misago.threads.models import Attachment, AttachmentType
-from misago.users.testutils import AuthenticatedUserTestCase
+from .. import test
+from ...conf.test import override_dynamic_settings
+from ..api.postingendpoint import PostingEndpoint
+from ..api.postingendpoint.attachments import (
+    AttachmentsMiddleware,
+    validate_attachments_count,
+)
+from ..models import Attachment, AttachmentType
 
 
-class RequestMock(object):
-    def __init__(self, data=None):
-        self.data = data or {}
+@pytest.fixture
+def context(default_category, dynamic_settings, user, user_acl):
+    thread = test.post_thread(category=default_category)
+    post = thread.first_post
+    post.update_fields = []
+
+    return {
+        "category": default_category,
+        "thread": thread,
+        "post": post,
+        "settings": dynamic_settings,
+        "user": user,
+        "user_acl": user_acl,
+    }
 
 
-class AttachmentsMiddlewareTests(AuthenticatedUserTestCase):
-    def setUp(self):
-        super(AttachmentsMiddlewareTests, self).setUp()
-
-        self.category = Category.objects.get(slug='first-category')
-        self.thread = testutils.post_thread(category=self.category)
-        self.post = self.thread.first_post
-
-        self.post.update_fields = []
-
-        self.override_acl()
-        self.filetype = AttachmentType.objects.order_by('id').last()
-
-    def override_acl(self, new_acl=None):
-        override_acl(self.user, new_acl or {'max_attachment_size': 1024})
-
-    def mock_attachment(self, user=True, post=None):
-        return Attachment.objects.create(
-            secret=Attachment.generate_new_secret(),
-            filetype=self.filetype,
-            post=post,
-            size=1000,
-            uploader=self.user if user else None,
-            uploader_name=self.user.username,
-            uploader_slug=self.user.slug,
-            uploader_ip='127.0.0.1',
-            filename='testfile_{}.zip'.format(Attachment.objects.count() + 1),
-        )
-
-    def test_use_this_middleware(self):
-        """use_this_middleware returns False if we can't upload attachments"""
-        middleware = AttachmentsMiddleware(user=self.user)
-
-        self.override_acl({'max_attachment_size': 0})
-
-        self.assertFalse(middleware.use_this_middleware())
-
-        self.override_acl({'max_attachment_size': 1024})
-
-        self.assertTrue(middleware.use_this_middleware())
-
-    def test_middleware_is_optional(self):
-        """middleware is optional"""
-        INPUTS = [{}, {'attachments': []}]
-
-        for test_input in INPUTS:
-            middleware = AttachmentsMiddleware(
-                request=RequestMock(test_input),
-                mode=PostingEndpoint.START,
-                user=self.user,
-                post=self.post,
-            )
-
-            serializer = middleware.get_serializer()
-            self.assertTrue(serializer.is_valid())
-
-    def test_middleware_validates_ids(self):
-        """middleware validates attachments ids"""
-        INPUTS = ['none', ['a', 'b', 123], range(settings.MISAGO_POST_ATTACHMENTS_LIMIT + 1)]
-
-        for test_input in INPUTS:
-            middleware = AttachmentsMiddleware(
-                request=RequestMock({
-                    'attachments': test_input
-                }),
-                mode=PostingEndpoint.START,
-                user=self.user,
-                post=self.post,
-            )
-
-            serializer = middleware.get_serializer()
-            self.assertFalse(serializer.is_valid(), "%r shouldn't validate" % test_input)
-
-    def test_get_initial_attachments(self):
-        """get_initial_attachments returns list of attachments already existing on post"""
-        middleware = AttachmentsMiddleware(
-            request=RequestMock(),
-            mode=PostingEndpoint.EDIT,
-            user=self.user,
-            post=self.post,
-        )
-
-        serializer = middleware.get_serializer()
-
-        attachments = serializer.get_initial_attachments(
-            middleware.mode, middleware.user, middleware.post
-        )
-        self.assertEqual(attachments, [])
-
-        attachment = self.mock_attachment(post=self.post)
-        attachments = serializer.get_initial_attachments(
-            middleware.mode, middleware.user, middleware.post
-        )
-        self.assertEqual(attachments, [attachment])
-
-    def test_get_new_attachments(self):
-        """get_initial_attachments returns list of attachments already existing on post"""
-        middleware = AttachmentsMiddleware(
-            request=RequestMock(),
-            mode=PostingEndpoint.EDIT,
-            user=self.user,
-            post=self.post,
-        )
-
-        serializer = middleware.get_serializer()
-
-        attachments = serializer.get_new_attachments(middleware.user, [1, 2, 3])
-        self.assertEqual(attachments, [])
-
-        attachment = self.mock_attachment()
-        attachments = serializer.get_new_attachments(middleware.user, [attachment.pk])
-        self.assertEqual(attachments, [attachment])
-
-        # only own orphaned attachments may be assigned to posts
-        other_user_attachment = self.mock_attachment(user=False)
-        attachments = serializer.get_new_attachments(middleware.user, [other_user_attachment.pk])
-        self.assertEqual(attachments, [])
-
-    def test_cant_delete_attachment(self):
-        """middleware validates if we have permission to delete other users attachments"""
-        self.override_acl({
-            'max_attachment_size': 1024,
-            'can_delete_other_users_attachments': False,
-        })
-
-        attachment = self.mock_attachment(user=False, post=self.post)
-        self.assertIsNone(attachment.uploader)
-
-        serializer = AttachmentsMiddleware(
-            request=RequestMock({
-                'attachments': []
-            }),
-            mode=PostingEndpoint.EDIT,
-            user=self.user,
-            post=self.post,
-        ).get_serializer()
-
-        self.assertFalse(serializer.is_valid())
-
-    def test_add_attachments(self):
-        """middleware adds attachments to post"""
-        attachments = [
-            self.mock_attachment(),
-            self.mock_attachment(),
-        ]
-
-        middleware = AttachmentsMiddleware(
-            request=RequestMock({
-                'attachments': [a.pk for a in attachments]
-            }),
-            mode=PostingEndpoint.EDIT,
-            user=self.user,
-            post=self.post,
-        )
-
-        serializer = middleware.get_serializer()
-        self.assertTrue(serializer.is_valid())
-        middleware.save(serializer)
-
-        # attachments were associated with post
-        self.assertEqual(self.post.update_fields, ['attachments_cache'])
-        self.assertEqual(self.post.attachment_set.count(), 2)
-
-        attachments_filenames = list(reversed([a.filename for a in attachments]))
-        self.assertEqual([a['filename'] for a in self.post.attachments_cache],
-                         attachments_filenames)
-
-    def test_remove_attachments(self):
-        """middleware removes attachment from post and db"""
-        attachments = [
-            self.mock_attachment(post=self.post),
-            self.mock_attachment(post=self.post),
-        ]
-
-        middleware = AttachmentsMiddleware(
-            request=RequestMock({
-                'attachments': [attachments[0].pk]
-            }),
-            mode=PostingEndpoint.EDIT,
-            user=self.user,
-            post=self.post,
-        )
-
-        serializer = middleware.get_serializer()
-        self.assertTrue(serializer.is_valid())
-        middleware.save(serializer)
-
-        # attachments were associated with post
-        self.assertEqual(self.post.update_fields, ['attachments_cache'])
-        self.assertEqual(self.post.attachment_set.count(), 1)
-
-        self.assertEqual(Attachment.objects.count(), 1)
-
-        attachments_filenames = [attachments[0].filename]
-        self.assertEqual([a['filename'] for a in self.post.attachments_cache],
-                         attachments_filenames)
-
-    def test_steal_attachments(self):
-        """middleware validates if attachments are already assigned to other posts"""
-        other_post = testutils.reply_thread(self.thread)
-
-        attachments = [
-            self.mock_attachment(post=other_post),
-            self.mock_attachment(),
-        ]
-
-        middleware = AttachmentsMiddleware(
-            request=RequestMock({
-                'attachments': [attachments[0].pk, attachments[1].pk]
-            }),
-            mode=PostingEndpoint.EDIT,
-            user=self.user,
-            post=self.post,
-        )
-
-        serializer = middleware.get_serializer()
-        self.assertTrue(serializer.is_valid())
-        middleware.save(serializer)
-
-        # only unassociated attachment was associated with post
-        self.assertEqual(self.post.update_fields, ['attachments_cache'])
-        self.assertEqual(self.post.attachment_set.count(), 1)
-
-        self.assertEqual(Attachment.objects.get(pk=attachments[0].pk).post, other_post)
-        self.assertEqual(Attachment.objects.get(pk=attachments[1].pk).post, self.post)
-
-    def test_edit_attachments(self):
-        """middleware removes and adds attachments to post"""
-        attachments = [
-            self.mock_attachment(post=self.post),
-            self.mock_attachment(post=self.post),
-            self.mock_attachment(),
-        ]
-
-        middleware = AttachmentsMiddleware(
-            request=RequestMock({
-                'attachments': [attachments[0].pk, attachments[2].pk]
-            }),
-            mode=PostingEndpoint.EDIT,
-            user=self.user,
-            post=self.post,
-        )
-
-        serializer = middleware.get_serializer()
-        self.assertTrue(serializer.is_valid())
-        middleware.save(serializer)
-
-        # attachments were associated with post
-        self.assertEqual(self.post.update_fields, ['attachments_cache'])
-        self.assertEqual(self.post.attachment_set.count(), 2)
-
-        attachments_filenames = [attachments[2].filename, attachments[0].filename]
-        self.assertEqual([a['filename'] for a in self.post.attachments_cache],
-                         attachments_filenames)
+def create_attachment(*, post=None, user=None):
+    return Attachment.objects.create(
+        secret=Attachment.generate_new_secret(),
+        filetype=AttachmentType.objects.order_by("id").last(),
+        post=post,
+        size=1000,
+        uploader=user if user else None,
+        uploader_name=user.username if user else "testuser",
+        uploader_slug=user.slug if user else "testuser",
+        filename="testfile_%s.zip" % (Attachment.objects.count() + 1),
+    )
 
 
-class ValidateAttachmentsCountTests(AuthenticatedUserTestCase):
-    def test_validate_attachments_count(self):
-        """too large count of attachments is rejected"""
-        validate_attachments_count(range(settings.MISAGO_POST_ATTACHMENTS_LIMIT))
+def test_middleware_is_used_if_user_has_permission_to_upload_attachments(context):
+    context["user_acl"]["max_attachment_size"] = 1024
+    middleware = AttachmentsMiddleware(**context)
+    assert middleware.use_this_middleware()
 
-        with self.assertRaises(serializers.ValidationError):
-            validate_attachments_count(range(settings.MISAGO_POST_ATTACHMENTS_LIMIT + 1))
+
+def test_middleware_is_not_used_if_user_has_no_permission_to_upload_attachments(
+    context,
+):
+    context["user_acl"]["max_attachment_size"] = 0
+    middleware = AttachmentsMiddleware(**context)
+    assert not middleware.use_this_middleware()
+
+
+def test_middleware_handles_no_data(context):
+    middleware = AttachmentsMiddleware(
+        request=Mock(data={}), mode=PostingEndpoint.START, **context
+    )
+
+    serializer = middleware.get_serializer()
+    assert serializer.is_valid()
+
+
+def test_middleware_handles_empty_data(context):
+    middleware = AttachmentsMiddleware(
+        request=Mock(data={"attachments": []}), mode=PostingEndpoint.START, **context
+    )
+
+    serializer = middleware.get_serializer()
+    assert serializer.is_valid()
+
+
+def test_data_validation_fails_if_attachments_data_is_not_iterable(context):
+    middleware = AttachmentsMiddleware(
+        request=Mock(data={"attachments": "none"}),
+        mode=PostingEndpoint.START,
+        **context
+    )
+
+    serializer = middleware.get_serializer()
+    assert not serializer.is_valid()
+
+
+def test_data_validation_fails_if_attachments_data_has_non_int_values(context):
+    middleware = AttachmentsMiddleware(
+        request=Mock(data={"attachments": [1, "b"]}),
+        mode=PostingEndpoint.START,
+        **context
+    )
+
+    serializer = middleware.get_serializer()
+    assert not serializer.is_valid()
+
+
+@override_dynamic_settings(post_attachments_limit=2)
+def test_data_validation_fails_if_attachments_data_is_longer_than_allowed(context):
+    middleware = AttachmentsMiddleware(
+        request=Mock(data={"attachments": range(5)}),
+        mode=PostingEndpoint.START,
+        **context
+    )
+
+    serializer = middleware.get_serializer()
+    assert not serializer.is_valid()
+
+
+def test_middleware_adds_attachment_to_new_post(context):
+    new_attachment = create_attachment(user=context["user"])
+    middleware = AttachmentsMiddleware(
+        request=Mock(data={"attachments": [new_attachment.id]}),
+        mode=PostingEndpoint.START,
+        **context
+    )
+    serializer = middleware.get_serializer()
+    serializer.is_valid()
+    middleware.save(serializer)
+
+    new_attachment.refresh_from_db()
+    assert new_attachment.post == context["post"]
+
+
+def test_middleware_adds_attachment_to_attachments_cache(context):
+    new_attachment = create_attachment(user=context["user"])
+    middleware = AttachmentsMiddleware(
+        request=Mock(data={"attachments": [new_attachment.id]}),
+        mode=PostingEndpoint.START,
+        **context
+    )
+    serializer = middleware.get_serializer()
+    serializer.is_valid()
+    middleware.save(serializer)
+
+    attachments_cache = context["post"].attachments_cache
+    assert len(attachments_cache) == 1
+    assert attachments_cache[0]["id"] == new_attachment.id
+
+
+def test_middleware_adds_attachment_to_existing_post(context):
+    new_attachment = create_attachment(user=context["user"])
+    middleware = AttachmentsMiddleware(
+        request=Mock(data={"attachments": [new_attachment.id]}),
+        mode=PostingEndpoint.EDIT,
+        **context
+    )
+    serializer = middleware.get_serializer()
+    serializer.is_valid()
+    middleware.save(serializer)
+
+    new_attachment.refresh_from_db()
+    assert new_attachment.post == context["post"]
+
+
+def test_middleware_adds_attachment_to_post_with_existing_attachment(context):
+    old_attachment = create_attachment(post=context["post"])
+    new_attachment = create_attachment(user=context["user"])
+    middleware = AttachmentsMiddleware(
+        request=Mock(data={"attachments": [old_attachment.id, new_attachment.id]}),
+        mode=PostingEndpoint.EDIT,
+        **context
+    )
+    serializer = middleware.get_serializer()
+    serializer.is_valid()
+    middleware.save(serializer)
+
+    new_attachment.refresh_from_db()
+    assert new_attachment.post == context["post"]
+
+    old_attachment.refresh_from_db()
+    assert old_attachment.post == context["post"]
+
+
+def test_middleware_adds_attachment_to_existing_attachments_cache(context):
+    old_attachment = create_attachment(post=context["post"])
+    new_attachment = create_attachment(user=context["user"])
+    middleware = AttachmentsMiddleware(
+        request=Mock(data={"attachments": [old_attachment.id, new_attachment.id]}),
+        mode=PostingEndpoint.EDIT,
+        **context
+    )
+    serializer = middleware.get_serializer()
+    serializer.is_valid()
+    middleware.save(serializer)
+
+    attachments_cache = context["post"].attachments_cache
+    assert len(attachments_cache) == 2
+    assert attachments_cache[0]["id"] == new_attachment.id
+    assert attachments_cache[1]["id"] == old_attachment.id
+
+
+def test_other_user_attachment_cant_be_added_to_post(context):
+    attachment = create_attachment()
+    middleware = AttachmentsMiddleware(
+        request=Mock(data={"attachments": [attachment.id]}),
+        mode=PostingEndpoint.EDIT,
+        **context
+    )
+    serializer = middleware.get_serializer()
+    serializer.is_valid()
+    middleware.save(serializer)
+
+    attachment.refresh_from_db()
+    assert not attachment.post
+
+
+def test_other_post_attachment_cant_be_added_to_new_post(context, default_category):
+    post = test.post_thread(category=default_category).first_post
+    attachment = create_attachment(post=post, user=context["user"])
+    middleware = AttachmentsMiddleware(
+        request=Mock(data={"attachments": [attachment.id]}),
+        mode=PostingEndpoint.EDIT,
+        **context
+    )
+    serializer = middleware.get_serializer()
+    serializer.is_valid()
+    middleware.save(serializer)
+
+    attachment.refresh_from_db()
+    assert attachment.post == post
+
+
+def test_middleware_removes_attachment_from_post(context):
+    attachment = create_attachment(post=context["post"], user=context["user"])
+    middleware = AttachmentsMiddleware(
+        request=Mock(data={"attachments": []}), mode=PostingEndpoint.EDIT, **context
+    )
+    serializer = middleware.get_serializer()
+    serializer.is_valid()
+    middleware.save(serializer)
+
+    context["post"].refresh_from_db()
+    assert not context["post"].attachment_set.exists()
+
+
+def test_middleware_removes_attachment_from_attachments_cache(context):
+    attachment = create_attachment(post=context["post"], user=context["user"])
+    middleware = AttachmentsMiddleware(
+        request=Mock(data={"attachments": []}), mode=PostingEndpoint.EDIT, **context
+    )
+    serializer = middleware.get_serializer()
+    serializer.is_valid()
+    middleware.save(serializer)
+
+    assert not context["post"].attachments_cache
+
+
+def test_middleware_deletes_attachment_removed_from_post(context):
+    attachment = create_attachment(post=context["post"], user=context["user"])
+    middleware = AttachmentsMiddleware(
+        request=Mock(data={"attachments": []}), mode=PostingEndpoint.EDIT, **context
+    )
+    serializer = middleware.get_serializer()
+    serializer.is_valid()
+    middleware.save(serializer)
+
+    with pytest.raises(Attachment.DoesNotExist):
+        attachment.refresh_from_db()
+
+
+def test_middleware_blocks_user_from_removing_other_user_attachment_without_permission(
+    context,
+):
+    attachment = create_attachment(post=context["post"])
+    middleware = AttachmentsMiddleware(
+        request=Mock(data={"attachments": []}), mode=PostingEndpoint.EDIT, **context
+    )
+    serializer = middleware.get_serializer()
+    assert not serializer.is_valid()
+    middleware.save(serializer)
+
+    attachment.refresh_from_db()
+    assert attachment.post == context["post"]
+
+
+def test_middleware_allows_user_with_permission_to_remove_other_user_attachment(
+    context,
+):
+    context["user_acl"]["can_delete_other_users_attachments"] = True
+    attachment = create_attachment(post=context["post"])
+    middleware = AttachmentsMiddleware(
+        request=Mock(data={"attachments": []}), mode=PostingEndpoint.EDIT, **context
+    )
+    serializer = middleware.get_serializer()
+    serializer.is_valid()
+    middleware.save(serializer)
+
+    context["post"].refresh_from_db()
+    assert not context["post"].attachment_set.exists()
+
+
+def test_attachments_count_validator_allows_attachments_within_limit():
+    settings = Mock(post_attachments_limit=5)
+    validate_attachments_count(range(5), settings)
+
+
+def test_attachments_count_validator_raises_validation_error_on_too_many_attachmes():
+    settings = Mock(post_attachments_limit=2)
+    with pytest.raises(serializers.ValidationError):
+        validate_attachments_count(range(5), settings)

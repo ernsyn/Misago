@@ -1,70 +1,75 @@
+from pathlib import Path
+
 from django.contrib.postgres.fields import JSONField
 from django.db import models
 
-from . import utils
-
-
-class SettingsGroupsManager(models.Manager):
-    def ordered_alphabetically(self):
-        from django.utils.translation import ugettext as _
-
-        groups_dict = {}
-
-        for group in self.all():
-            groups_dict[_(group.name)] = group
-
-        ordered_groups = []
-        for key in groups_dict.keys():
-            ordered_groups.append(groups_dict[key])
-        return ordered_groups
-
-
-class SettingsGroup(models.Model):
-    key = models.CharField(max_length=255, unique=True)
-    name = models.CharField(max_length=255)
-    description = models.TextField(null=True, blank=True)
-
-    objects = SettingsGroupsManager()
+from ..core.utils import get_file_hash
+from .hydrators import dehydrate_value, hydrate_value
 
 
 class SettingsManager(models.Manager):
     def change_setting(self, setting, dry_value=None, wet_value=None):
         if dry_value:
             return self.filter(setting=setting).update(dry_value=dry_value)
-        elif wet_value:
+
+        if wet_value:
             try:
                 setting = self.get(setting=setting)
                 setting.value = wet_value
-                setting.save(update_fields=['dry_value'])
+                setting.save(update_fields=["dry_value"])
             except Setting.DoesNotExist:
                 return 0
 
 
 class Setting(models.Model):
-    group = models.ForeignKey(SettingsGroup, on_delete=models.CASCADE)
     setting = models.CharField(max_length=255, unique=True)
-    name = models.CharField(max_length=255)
-    description = models.TextField(null=True, blank=True)
-    legend = models.CharField(max_length=255, null=True, blank=True)
-    order = models.IntegerField(default=0, db_index=True)
+    python_type = models.CharField(max_length=255, default="string")
     dry_value = models.TextField(null=True, blank=True)
-    default_value = models.TextField(null=True, blank=True)
-    python_type = models.CharField(max_length=255, default='string')
+    image = models.ImageField(
+        upload_to="conf",
+        height_field="image_height",
+        width_field="image_width",
+        null=True,
+        blank=True,
+    )
+    image_size = models.PositiveIntegerField(null=True, blank=True)
+    image_width = models.PositiveIntegerField(null=True, blank=True)
+    image_height = models.PositiveIntegerField(null=True, blank=True)
     is_public = models.BooleanField(default=False)
     is_lazy = models.BooleanField(default=False)
-    form_field = models.CharField(max_length=255, default='text')
-    field_extra = JSONField()
 
     objects = SettingsManager()
 
     @property
+    def image_dimensions(self):
+        if self.image_width and self.image_height:
+            return self.image_width, self.image_height
+        return None
+
+    @property
     def value(self):
-        return utils.get_setting_value(self)
+        if self.python_type == "image":
+            return self.image
+        return hydrate_value(self.python_type, self.dry_value)
 
     @value.setter
     def value(self, new_value):
-        return utils.set_setting_value(self, new_value)
+        if new_value is not None:
+            if self.python_type == "image":
+                rename_image_file(new_value, self.setting)
+                self.image = new_value
+                self.image_size = new_value.size
+            else:
+                self.dry_value = dehydrate_value(self.python_type, new_value)
+        else:
+            self.dry_value = None
+        return new_value
 
-    @property
-    def has_custom_value(self):
-        return utils.has_custom_value(self)
+
+def rename_image_file(file_obj, prefix):
+    name_parts = [
+        prefix.replace("_", "-"),
+        get_file_hash(file_obj),
+        Path(file_obj.name).suffix.strip(".").lower(),
+    ]
+    file_obj.name = ".".join(name_parts)

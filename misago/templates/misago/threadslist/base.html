@@ -3,14 +3,9 @@
 
 
 {% block meta-extra %}
-<link rel="canonical" href="{{ REQUEST_PATH }}" />
-{% if paginator.previous > 1 %}
-<link rel="prev" href="{{ REQUEST_PATH }}?page={{ paginator.previous }}" />
-{% elif paginator.first %}
-<link rel="prev" href="{{ REQUEST_PATH }}" />
-{% endif %}
-{% if paginator.next %}
-<link rel="next" href="{{ REQUEST_PATH }}?page={{ paginator.next }}" />
+<link rel="canonical" href="{{ request_path }}" />
+{% if list_page.next %}
+<link rel="next" href="{{ request_path }}?start={{ list_page.next }}" />
 {% endif %}
 {% endblock meta-extra %}
 
@@ -48,7 +43,6 @@
         <div class="threads-list ui-ready">
           {% block threads-list %}
             <ul class="list-group" itemscope itemtype="http://schema.org/ItemList">
-              <meta itemprop="numberOfItems" content="{{ paginator.count }}">
               <meta itemprop="itemListOrder" content="http://schema.org/ItemListOrderDescending">
               {% for thread in threads %}
                 {% block thread %}
@@ -59,7 +53,7 @@
                   {% block list-empty-message %}
                     {% if list_type == 'all' %}
                       <p class="lead">
-                        {% if category.depth %}
+                        {% if category.level %}
                           {% trans "There are no threads in this category." %}
                         {% else %}
                           {% trans "There are no threads on this forum... yet!" %}
@@ -81,35 +75,16 @@
         </div>
 
         <noscript>
-          {% if paginator.pages > 1 %}
+          {% if list_page.next %}
             <nav role="navigation" itemscope itemtype="http://schema.org/SiteNavigationElement">
               <ul class="pager">
-                {% if paginator.previous > 1 %}
-                  <li class="previous">
-                    <a href="{{ REQUEST_PATH }}?page={{ paginator.previous }}" rel="prev" title="{% trans 'Previous page' %}">
-                      <span aria-hidden="true" class="material-icon">
-                        arrow_back
-                      </span>
-                    </a>
-                  </li>
-                {% elif paginator.first %}
-                  <li class="previous">
-                    <a href="{{ REQUEST_PATH }}" rel="prev" title="{% trans 'Previous page' %}">
-                      <span aria-hidden="true" class="material-icon">
-                        arrow_back
-                      </span>
-                    </a>
-                  </li>
-                {% endif %}
-                {% if paginator.next %}
-                  <li class="next">
-                    <a href="{{ REQUEST_PATH }}?page={{ paginator.next }}" rel="next" title="{% trans 'Next page' %}">
-                      <span aria-hidden="true" class="material-icon">
-                        arrow_forward
-                      </span>
-                    </a>
-                  </li>
-                {% endif %}
+                <li class="next">
+                  <a href="{{ request_path }}?page={{ list_page.next }}" rel="next" title="{% trans 'Next page' %}">
+                    <span aria-hidden="true" class="material-icon">
+                      arrow_forward
+                    </span>
+                  </a>
+                </li>
               </ul>
             </nav>
           {% endif %}

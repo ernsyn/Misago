@@ -1,13 +1,12 @@
 from collections import OrderedDict
 
-from misago.categories.models import Category
-
 from . import PostingMiddleware
+from ....categories.models import Category
 
 
 class SaveChangesMiddleware(PostingMiddleware):
     def __init__(self, **kwargs):
-        super(SaveChangesMiddleware, self).__init__(**kwargs)
+        super().__init__(**kwargs)
         self.reset_state()
 
     def reset_state(self):

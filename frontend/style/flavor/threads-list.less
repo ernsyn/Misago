@@ -3,6 +3,11 @@
 // --------------------------------------------------
 
 
+.threads-list .list-group {
+  border-radius: @list-group-border-radius;
+}
+
+
 .threads-list .thread-main {
   img {
     border-radius: @border-radius-base;
@@ -59,6 +64,10 @@
 
   .thread-detail-unapproved {
     color: @thread-unapproved-badge-color;
+  }
+
+  a.thread-detail-answered {
+    color: @thread-answered-badge-color;
   }
 
   .thread-detail-unapproved-posts {

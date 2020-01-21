@@ -3,6 +3,13 @@
 // --------------------------------------------------
 
 
+// Post body
+.panel-post {
+  background: @post-bg;
+  border: 1px solid @post-border;
+}
+
+
 // Post side
 .post-side {
   color: @gray-light;
@@ -97,7 +104,7 @@
 
 // Attachments
 .post-attachments {
-  background-color: darken(@panel-bg, 5%);
+  background-color: @gray-lighter;
   border: none;
   border-radius: @border-radius-base;
   margin-bottom: @line-height-computed * 1.5;

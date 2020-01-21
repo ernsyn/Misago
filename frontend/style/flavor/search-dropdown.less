@@ -2,17 +2,25 @@
 // Search Dropdown
 // --------------------------------------------------
 
+
+.dropdown-search-results {
+  border-radius: 0px 0px @border-radius-base @border-radius-base;
+}
+
 .dropdown-search-message {
+  border-top: 1px solid @gray-lighter;
   padding: @padding-large-vertical @padding-large-horizontal;
 
   color: @text-muted;
 }
 
 .dropdown-search-loader {
+  border-top: 1px solid @gray-lighter;
   padding: @padding-large-vertical @padding-large-horizontal;
 }
 
 .dropdown-search-header {
+  border-top: 1px solid @gray-lighter;
   padding: 8px 20px;
 
   color: @text-muted;
@@ -25,49 +33,28 @@
   small {
     color: @text-muted;
   }
-
-  &:hover small, &:focus small {
-    color: @dropdown-link-hover-color;
-  }
-
-  &:active small {
-    color: @dropdown-link-active-color;
-  }
 }
 
 .dropdown-search-thread {
-  .media-heading, .media-body small {
-    display: block;
-    width: 370px;
-
-    overflow-x: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .media-heading {
-    height: 22px;
-    margin-bottom: 0px;
-  }
-
-  .media-body small {
+  .dropdown-search-post-content {
     overflow: hidden;
     white-space: normal;
     max-height: 47px;
   }
 
-  .dropdown-search-post-content {
-    margin-bottom: @line-height-computed / 4;
+  .dropdown-search-post-footer {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 }
 
 
 // footer
 .dropdown-search-footer {
-  border-bottom: 1px solid @gray-lighter;
   padding-bottom: @padding-small-vertical;
 
   &:last-child {
-    border-bottom: none;
     padding-bottom: 0px;
   }
 }

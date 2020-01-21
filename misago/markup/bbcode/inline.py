@@ -4,7 +4,13 @@ Supported inline BBCodes: b, u, i
 import re
 
 from markdown.inlinepatterns import (
-    ImagePattern, LinkPattern, SimpleTagPattern, dequote, handleAttributes, util)
+    ImagePattern,
+    LinkPattern,
+    SimpleTagPattern,
+    dequote,
+    handleAttributes,
+    util,
+)
 
 
 class SimpleBBCodePattern(SimpleTagPattern):
@@ -12,8 +18,8 @@ class SimpleBBCodePattern(SimpleTagPattern):
     Case insensitive simple BBCode
     """
 
-    def __init__(self, bbcode, tag=None):
-        self.pattern = r'(\[%s\](.*?)\[/%s\])' % (bbcode, bbcode)
+    def __init__(self, bbcode, tag=None):  # pylint: disable=super-init-not-called
+        self.pattern = r"(\[%s\](.*?)\[/%s\])" % (bbcode, bbcode)
         self.compiled_re = re.compile(
             "^(.*?)%s(.*?)$" % self.pattern, re.DOTALL | re.UNICODE | re.IGNORECASE
         )
@@ -25,12 +31,12 @@ class SimpleBBCodePattern(SimpleTagPattern):
         self.tag = tag or bbcode.lower()
 
 
-bold = SimpleBBCodePattern('b')
-italics = SimpleBBCodePattern('i')
-underline = SimpleBBCodePattern('u')
+bold = SimpleBBCodePattern("b")
+italics = SimpleBBCodePattern("i")
+underline = SimpleBBCodePattern("u")
 
 
-class BBcodePattern(object):
+class BBcodePattern:
     def __init__(self, pattern, markdown_instance=None):
         self.pattern = pattern
         self.compiled_re = re.compile(
@@ -50,22 +56,22 @@ class BBCodeImagePattern(BBcodePattern, ImagePattern):
             src = src_parts[0]
             if src[0] == "<" and src[-1] == ">":
                 src = src[1:-1]
-            el.set('src', self.sanitize_url(self.unescape(src)))
+            el.set("src", self.sanitize_url(self.unescape(src)))
         else:
-            el.set('src', "")
+            el.set("src", "")
         if len(src_parts) > 1:
-            el.set('title', dequote(self.unescape(" ".join(src_parts[1:]))))
+            el.set("title", dequote(self.unescape(" ".join(src_parts[1:]))))
 
         if self.markdown.enable_attributes:
             truealt = handleAttributes(m.group(2), el)
         else:
             truealt = m.group(2)
 
-        el.set('alt', self.unescape(truealt))
+        el.set("alt", self.unescape(truealt))
         return el
 
 
-IMAGE_PATTERN = r'\[img\](.*?)\[/img\]'
+IMAGE_PATTERN = r"\[img\](.*?)\[/img\]"
 
 
 def image(md):
@@ -76,12 +82,12 @@ class BBCodeUrlPattern(BBcodePattern, LinkPattern):
     def handleMatch(self, m):
         el = util.etree.Element("a")
 
-        if m.group(6):
-            el.text = m.group(8)
-            href = m.group(5)
+        if m.group("arg"):
+            el.text = m.group("content")
+            href = m.group("arg")
         else:
-            el.text = m.group(8).strip()
-            href = m.group(8)
+            el.text = m.group("content").strip()
+            href = m.group("content")
 
         if href:
             el.set("href", self.sanitize_url(self.unescape(href.strip())))
@@ -90,7 +96,7 @@ class BBCodeUrlPattern(BBcodePattern, LinkPattern):
         return el
 
 
-URL_PATTERN = r'((\[url=("?)(.*?)("?)\])|(\[url\]))(.*?)\[/url\]'
+URL_PATTERN = r'((\[url=("?)(?P<arg>.*?)("?)\])|(\[url\]))(?P<content>.*?)\[/url\]'
 
 
 def url(md):

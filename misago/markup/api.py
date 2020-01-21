@@ -2,24 +2,23 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from django.core.exceptions import ValidationError
-from django.utils import six
-
-from misago.threads.validators import validate_post_length
-
-from . import common_flavour, finalise_markup
+from . import common_flavour, finalize_markup
+from .serializers import MarkupSerializer
 
 
-@api_view(['POST'])
+@api_view(["POST"])
 def parse_markup(request):
-    post = six.text_type(request.data.get('post', '')).strip()
+    print(request.data)
+    serializer = MarkupSerializer(
+        data=request.data, context={"settings": request.settings}
+    )
+    if not serializer.is_valid():
+        errors_list = list(serializer.errors.values())[0]
+        return Response({"detail": errors_list[0]}, status=status.HTTP_400_BAD_REQUEST)
 
-    try:
-        validate_post_length(post)
-    except ValidationError as e:
-        return Response({'detail': e.args[0]}, status=status.HTTP_400_BAD_REQUEST)
+    parsing_result = common_flavour(
+        request, request.user, serializer.data["post"], force_shva=True
+    )
+    finalized = finalize_markup(parsing_result["parsed_text"])
 
-    parsed = common_flavour(request, request.user, post, force_shva=True)['parsed_text']
-    finalised = finalise_markup(parsed)
-
-    return Response({'parsed': finalised})
+    return Response({"parsed": finalized})

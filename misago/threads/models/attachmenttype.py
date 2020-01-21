@@ -1,11 +1,7 @@
-from __future__ import unicode_literals
-
 from django.db import models
-from django.utils.encoding import python_2_unicode_compatible
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 
-@python_2_unicode_compatible
 class AttachmentType(models.Model):
     ENABLED = 0
     LOCKED = 1
@@ -24,8 +20,12 @@ class AttachmentType(models.Model):
         ],
     )
 
-    limit_uploads_to = models.ManyToManyField('misago_acl.Role', related_name='+', blank=True)
-    limit_downloads_to = models.ManyToManyField('misago_acl.Role', related_name='+', blank=True)
+    limit_uploads_to = models.ManyToManyField(
+        "misago_acl.Role", related_name="+", blank=True
+    )
+    limit_downloads_to = models.ManyToManyField(
+        "misago_acl.Role", related_name="+", blank=True
+    )
 
     def __str__(self):
         return self.name
@@ -35,13 +35,17 @@ class AttachmentType(models.Model):
         return self.status == AttachmentType.ENABLED
 
     @property
+    def is_locked(self):
+        return self.status == AttachmentType.LOCKED
+
+    @property
     def extensions_list(self):
         if self.extensions:
-            return self.extensions.split(',')
+            return self.extensions.split(",")
         return []
 
     @property
     def mimetypes_list(self):
         if self.mimetypes:
-            return self.mimetypes.split(',')
+            return self.mimetypes.split(",")
         return []

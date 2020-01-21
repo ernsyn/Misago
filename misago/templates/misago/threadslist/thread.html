@@ -1,4 +1,4 @@
-{% load i18n misago_avatars misago_capture %}
+{% load i18n misago_absoluteurl misago_avatars misago_capture %}
 <li class="list-group-item {% if thread.category.css_class %}list-group-category-has-flavor list-group-item-category-{{ thread.category.css_class }}{% endif %} thread-{{ thread.is_read|yesno:'read,new' }}" itemprop="itemListElement" itemscope itemtype="http://schema.org/ListItem">
 
   <div class="thread-details-top">
@@ -49,6 +49,16 @@
           {% trans "Unapproved posts" %}
         </span>
       </span>
+    {% endif %}
+    {% if thread.has_best_answer %}
+      <a href="{{ thread.get_best_answer_url }}" class="hidden-xs thread-detail-answered">
+        <span class="material-icon">
+          check_box
+        </span>
+        <span class="detail-text">
+          {% trans "Answered" %}
+        </span>
+      </a>
     {% endif %}
     {% if thread.category != category %}
       <a class="item-title thread-detail-category visible-xs-inline-block {% if thread.category.css_class %}thread-detail-category-{{ thread.category.css_class }}{% endif %}" href="{{ thread.category.get_absolute_url }}">
@@ -130,6 +140,11 @@
                     </span>
                   </span>
                 {% endif %}
+                {% if thread.has_best_answer %}
+                  <a href="{{ thread.get_best_answer_url }}" class="visible-xs-inline-block thread-detail-answered">
+                    <span class="material-icon">check_box</span>
+                  </a>
+                {% endif %}
                 <span class="thread-detail-replies">
                   <span class="material-icon">
                     forum
@@ -197,5 +212,8 @@
       </div>
     </div>
   </div>
-  <meta itemprop="position" content="{{ paginator.before|add:forloop.counter }}">
+  
+  <meta itemprop="position" content="{{ list_page.start|add:forloop.counter }}">
+  <meta itemprop="url" content="{% absoluteurl thread.get_absolute_url %}">
+  <meta itemprop="name" content="{{ thread.title }}">
 </li>

@@ -1,89 +1,99 @@
-# -*- coding: utf-8 -*-
-from django.core.exceptions import ValidationError
-from django.test import TestCase
+from pathlib import Path
 
-from misago.users.models import User
+import pytest
 
-
-class UserManagerTests(TestCase):
-    def test_create_user(self):
-        """create_user created new user account successfully"""
-        user = User.objects.create_user(
-            'Bob',
-            'bob@test.com',
-            'Pass.123',
-            set_default_avatar=True,
-        )
-
-        db_user = User.objects.get(id=user.pk)
-
-        self.assertEqual(user.username, db_user.username)
-        self.assertEqual(user.slug, db_user.slug)
-        self.assertEqual(user.email, db_user.email)
-        self.assertEqual(user.email_hash, db_user.email_hash)
-
-    def test_create_user_twice(self):
-        """create_user is raising validation error for duplicate users"""
-        User.objects.create_user('Bob', 'bob@test.com', 'Pass.123')
-        with self.assertRaises(ValidationError):
-            User.objects.create_user('Bob', 'bob@test.com', 'Pass.123')
-
-    def test_create_superuser(self):
-        """create_superuser created new user account successfully"""
-        user = User.objects.create_superuser('Bob', 'bob@test.com', 'Pass.123')
-
-        db_user = User.objects.get(id=user.pk)
-
-        self.assertTrue(user.is_staff)
-        self.assertTrue(db_user.is_staff)
-        self.assertTrue(user.is_superuser)
-        self.assertTrue(db_user.is_superuser)
-
-    def test_get_user(self):
-        """get_by_ methods return user correctly"""
-        user = User.objects.create_user('Bob', 'bob@test.com', 'Pass.123')
-
-        db_user = User.objects.get_by_username(user.username)
-        self.assertEqual(user.pk, db_user.pk)
-
-        db_user = User.objects.get_by_email(user.email)
-        self.assertEqual(user.pk, db_user.pk)
-
-        db_user = User.objects.get_by_username_or_email(user.username)
-        self.assertEqual(user.pk, db_user.pk)
-
-        db_user = User.objects.get_by_username_or_email(user.email)
-        self.assertEqual(user.pk, db_user.pk)
-
-    def test_getters_unicode_handling(self):
-        """get_by_ methods handle unicode"""
-        with self.assertRaises(User.DoesNotExist):
-            User.objects.get_by_username(u'łóć')
-
-        with self.assertRaises(User.DoesNotExist):
-            User.objects.get_by_email(u'łóć@polskimail.pl')
-
-        with self.assertRaises(User.DoesNotExist):
-            User.objects.get_by_username_or_email(u'łóć@polskimail.pl')
+from ...conf import settings
+from ...core.utils import slugify
+from ..avatars import dynamic
+from ..datadownloads import request_user_data_download
+from ..models import Avatar, DataDownload, User
+from ..utils import hash_email
 
 
-class UserModelTests(TestCase):
-    def test_set_username(self):
-        """set_username sets username and slug on model"""
-        user = User()
+def test_username_and_slug_is_anonymized(user):
+    user.anonymize_data(anonymous_username="Deleted")
+    assert user.username == "Deleted"
+    assert user.slug == slugify("Deleted")
 
-        user.set_username('Boberson')
-        self.assertEqual(user.username, 'Boberson')
-        self.assertEqual(user.slug, 'boberson')
 
-        self.assertEqual(user.get_username(), 'Boberson')
-        self.assertEqual(user.get_full_name(), 'Boberson')
-        self.assertEqual(user.get_short_name(), 'Boberson')
+def test_user_avatar_files_are_deleted_during_user_deletion(user):
+    dynamic.set_avatar(user)
+    user.save()
 
-    def test_set_email(self):
-        """set_email sets email and hash on model"""
-        user = User()
+    user_avatars = []
+    for avatar in user.avatar_set.all():
+        avatar_path = Path(avatar.image.path)
+        assert avatar_path.exists()
+        assert avatar_path.is_file()
+        user_avatars.append(avatar)
+    assert user_avatars
 
-        user.set_email('bOb@TEst.com')
-        self.assertEqual(user.email, 'bOb@test.com')
-        self.assertTrue(user.email_hash)
+    user.delete(anonymous_username="Deleted")
+
+    for removed_avatar in user_avatars:
+        avatar_path = Path(removed_avatar.image.path)
+        assert not avatar_path.exists()
+        assert not avatar_path.is_file()
+
+        with pytest.raises(Avatar.DoesNotExist):
+            Avatar.objects.get(pk=removed_avatar.pk)
+
+
+def test_username_setter_also_sets_slug():
+    user = User()
+    user.set_username("TestUser")
+    assert user.username == "TestUser"
+    assert user.slug == "testuser"
+
+
+def test_django_username_getters_return_username(user):
+    assert user.get_username() == user.username
+    assert user.get_full_name() == user.username
+    assert user.get_short_name() == user.username
+
+
+def test_email_setter_normalizes_email():
+    user = User()
+    user.set_email("us3R@EXample.com")
+    assert user.email == "us3R@example.com"
+
+
+def test_email_setter_also_sets_email_hash():
+    user = User()
+    user.set_email("us3R@example.com")
+    assert user.email_hash == hash_email("us3R@example.com")
+
+
+def test_real_name_getter_returns_name_entered_in_profile_field(user):
+    user.profile_fields["real_name"] = "John Doe"
+    assert user.get_real_name() == "John Doe"
+
+
+def test_real_name_getter_returns_none_if_profile_field_has_no_value(user):
+    assert user.get_real_name() is None
+
+
+def test_marking_user_for_deletion_deactivates_their_account_in_db(user):
+    user.mark_for_delete()
+    assert not user.is_active
+    assert user.is_deleting_account
+
+    user.refresh_from_db()
+    assert not user.is_active
+    assert user.is_deleting_account
+
+
+def test_user_data_downloads_are_removed_by_anonymization(user):
+    data_download = request_user_data_download(user)
+    user.anonymize_data(anonymous_username="Deleted")
+
+    with pytest.raises(DataDownload.DoesNotExist):
+        data_download.refresh_from_db()
+
+
+def test_deleting_user_also_deletes_their_data_downloads(user):
+    data_download = request_user_data_download(user)
+    user.delete(anonymous_username="Deleted")
+
+    with pytest.raises(DataDownload.DoesNotExist):
+        data_download.refresh_from_db()

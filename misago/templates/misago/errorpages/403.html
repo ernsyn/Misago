@@ -15,6 +15,7 @@
 
 
 {% block og-title %}{% trans "Page not found" %}{% endblock %}
+{% block twitter-title %}{% trans "Page not found" %}{% endblock %}
 
 
 {% block og-description %}
@@ -26,8 +27,18 @@
 {% endblock %}
 
 
+{% block twitter-description %}
+  {% if message %}
+    {{ message }}
+  {% else %}
+    {% trans "You don't have permission to access this page." %}
+  {% endif %}
+{% endblock %}
+
+
 {% block content %}
 <div class="page page-error page-error-403">
+  <div class="page-header-bg"></div>
   <div class="container">
     <div class="message-panel">
 

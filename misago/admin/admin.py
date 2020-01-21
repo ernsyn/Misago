@@ -1,15 +1,6 @@
-from django.utils.deprecation import MiddlewareMixin
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 
-class MisagoAdminExtension(MiddlewareMixin):
-    def register_urlpatterns(self, urlpatterns):
-        pass
-
+class MisagoAdminExtension:
     def register_navigation_nodes(self, site):
-        site.add_node(
-            name=_("Home"),
-            icon='fa fa-home',
-            parent='misago:admin',
-            link='misago:admin:index',
-        )
+        site.add_node(name=_("Dashboard"), icon="fa fa-home")

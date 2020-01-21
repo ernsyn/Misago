@@ -1,13 +1,13 @@
 import random
 import time
 
+from django.core.management.base import BaseCommand
 from faker import Factory
 
-from django.core.management.base import BaseCommand
-
-from misago.acl import version as acl_version
-from misago.categories.models import Category, RoleCategoryACL
-from misago.core.management.progressbar import show_progress
+from ....acl.cache import clear_acl_cache
+from ....categories.models import Category
+from ....core.management.progressbar import show_progress
+from ...categories import fake_category, fake_closed_category
 
 
 class Command(BaseCommand):
@@ -15,80 +15,62 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument(
-            'categories',
+            "categories",
             help="number of categories to create",
-            nargs='?',
+            nargs="?",
             type=int,
             default=5,
         )
 
         parser.add_argument(
-            'minlevel',
+            "minlevel",
             help="min. level of created categories",
-            nargs='?',
+            nargs="?",
             type=int,
             default=0,
         )
 
-    def handle(self, *args, **options):
-        items_to_create = options['categories']
-        min_level = options['minlevel']
+    def handle(self, *args, **options):  # pylint: disable=too-many-locals
+        items_to_create = options["categories"]
+        min_level = options["minlevel"]
 
-        categories = Category.objects.all_categories(True)
-
-        copy_acl_from = list(Category.objects.all_categories())[0]
-
-        categories = categories.filter(level__gte=min_level)
         fake = Factory.create()
 
-        message = 'Creating %s fake categories...\n'
-        self.stdout.write(message % items_to_create)
+        categories = Category.objects.all_categories(include_root=True).filter(
+            level__gte=min_level
+        )
+        acl_source = list(Category.objects.all_categories())[0]
 
-        message = '\n\nSuccessfully created %s fake categories in %s'
+        if not categories.exists():
+            self.stdout.write("No valid parent categories exist.\n")
+            return
+
+        message = "Creating %s fake categories...\n"
+        self.stdout.write(message % items_to_create)
 
         created_count = 0
         start_time = time.time()
         show_progress(self, created_count, items_to_create)
 
         while created_count < items_to_create:
+            categories = (
+                Category.objects.all_categories(include_root=True)
+                .filter(level__gte=min_level)
+                .order_by("?")
+            )
             parent = random.choice(categories)
 
-            new_category = Category()
-            if random.randint(1, 100) > 75:
-                new_category.set_name(fake.catch_phrase().title())
+            if random.randint(0, 100) > 90:
+                fake_closed_category(fake, parent, copy_acl_from=acl_source)
             else:
-                new_category.set_name(fake.street_name())
-
-            if random.randint(1, 100) > 50:
-                if random.randint(1, 100) > 80:
-                    new_category.description = '\r\n'.join(fake.paragraphs())
-                else:
-                    new_category.description = fake.paragraph()
-
-            new_category.insert_at(
-                parent,
-                position='last-child',
-                save=True,
-            )
-
-            copied_acls = []
-            for acl in copy_acl_from.category_role_set.all():
-                copied_acls.append(
-                    RoleCategoryACL(
-                        role_id=acl.role_id,
-                        category=new_category,
-                        category_role_id=acl.category_role_id,
-                    )
-                )
-
-            if copied_acls:
-                RoleCategoryACL.objects.bulk_create(copied_acls)
+                fake_category(fake, parent, copy_acl_from=acl_source)
 
             created_count += 1
             show_progress(self, created_count, items_to_create, start_time)
 
-        acl_version.invalidate()
+        clear_acl_cache()
 
         total_time = time.time() - start_time
-        total_humanized = time.strftime('%H:%M:%S', time.gmtime(total_time))
+        total_humanized = time.strftime("%H:%M:%S", time.gmtime(total_time))
+        message = "\n\nSuccessfully created %s fake categories in %s"
         self.stdout.write(message % (created_count, total_humanized))

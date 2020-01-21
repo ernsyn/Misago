@@ -1,23 +1,21 @@
-from __future__ import unicode_literals
-
 import copy
 import logging
 
 from django.core.exceptions import ValidationError
 from django.urls import reverse
 from django.utils.module_loading import import_string
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 
-from misago.conf import settings
+from ...conf import settings
 
 from .basefields import *
 from .serializers import serialize_profilefields_data
 
 
-logger = logging.getLogger('misago.users.ProfileFields')
+logger = logging.getLogger("misago.users.ProfileFields")
 
 
-class ProfileFields(object):
+class ProfileFields:
     def __init__(self, fields_groups):
         self.is_loaded = False
 
@@ -30,28 +28,28 @@ class ProfileFields(object):
         fieldnames = {}
 
         for group in self.fields_groups:
-            for field_path in group['fields']:
+            for field_path in group["fields"]:
                 field = import_string(field_path)
                 field._field_path = field_path
 
                 if field_path in self.fields_dict:
                     raise ValueError(
-                        "{} profile field has been specified twice".format(field._field_path)
+                        "%s profile field has been specified twice" % field._field_path
                     )
 
-                if not getattr(field, 'fieldname', None):
+                if not getattr(field, "fieldname", None):
                     raise ValueError(
-                        "{} profile field has to specify fieldname attribute".format(
-                            field._field_path,
-                        )
+                        "%s profile field has to specify fieldname attribute"
+                        % field._field_path
                     )
 
                 if field.fieldname in fieldnames:
                     raise ValueError(
                         (
-                            '{} profile field defines fieldname "{}" '
-                            'that is already in use by the {}'
-                        ).format(
+                            '%s profile field defines fieldname "%s" '
+                            "that is already in use by the %s"
+                        )
+                        % (
                             field._field_path,
                             field.fieldname,
                             fieldnames[field.fieldname],
@@ -74,16 +72,13 @@ class ProfileFields(object):
 
         groups = []
         for group in self.fields_groups:
-            group_dict = {
-                'name': _(group['name']),
-                'fields': [],
-            }
+            group_dict = {"name": _(group["name"]), "fields": []}
 
-            for field_path in group['fields']:
+            for field_path in group["fields"]:
                 field = self.fields_dict[field_path]
-                group_dict['fields'].append(field)
+                group_dict["fields"].append(field)
 
-            if group_dict['fields']:
+            if group_dict["fields"]:
                 groups.append(group_dict)
         return groups
 
@@ -105,17 +100,14 @@ class ProfileFields(object):
 
         form._profile_fields_groups = []
         for group in self.fields_groups:
-            group_dict = {
-                'name': _(group['name']),
-                'fields': [],
-            }
+            group_dict = {"name": _(group["name"]), "fields": []}
 
-            for field_path in group['fields']:
+            for field_path in group["fields"]:
                 field = self.fields_dict[field_path]
                 if field.fieldname in form._profile_fields:
-                    group_dict['fields'].append(field.fieldname)
+                    group_dict["fields"].append(field.fieldname)
 
-            if group_dict['fields']:
+            if group_dict["fields"]:
                 form._profile_fields_groups.append(group_dict)
 
     def clean_form(self, request, user, form, cleaned_data):
@@ -125,7 +117,8 @@ class ProfileFields(object):
 
             try:
                 cleaned_data[field.fieldname] = field.clean(
-                    request, user, cleaned_data[field.fieldname])
+                    request, user, cleaned_data[field.fieldname]
+                )
             except ValidationError as e:
                 form.add_error(field.fieldname, e)
 
@@ -140,31 +133,32 @@ class ProfileFields(object):
                 new_fields[fieldname] = form.cleaned_data[fieldname]
         user.profile_fields = new_fields
 
-        if old_fields != new_fields:
-            if request.user == user:
-                log_message = "{} edited own profile fields".format(user.username)
-            else:
-                log_message = "{} edited {}'s (#{}) profile fields".format(request.user, user.username, user.pk)
+        old_fields_reduced = {k: v for k, v in old_fields.items() if v}
+        new_fields_reduced = {k: v for k, v in new_fields.items() if v}
 
-            logger.info(
-                log_message,
-                extra={
-                    'old_fields': old_fields,
-                    'new_fields': new_fields,
+        if old_fields_reduced != new_fields_reduced:
+            self.log_profile_fields_update(request, user)
 
-                    'tags': {
-                        'absolute_url': request.build_absolute_uri(
-                            reverse(
-                                'misago:user-details',
-                                kwargs={
-                                    'slug': user.slug,
-                                    'pk': user.pk,
-                                },
-                            )
-                        ),
-                    },
-                }
+    def log_profile_fields_update(self, request, user):
+        if request.user == user:
+            log_message = "%s edited own profile fields" % user.username
+        else:
+            log_message = "%s edited %s's (#%s) profile fields" % (
+                request.user,
+                user.username,
+                user.pk,
             )
+
+        logger.info(
+            log_message,
+            extra={
+                "absolute_url": request.build_absolute_uri(
+                    reverse(
+                        "misago:user-details", kwargs={"slug": user.slug, "pk": user.pk}
+                    )
+                )
+            },
+        )
 
     def search_users(self, criteria, queryset):
         if not self.is_loaded:

@@ -1,90 +1,79 @@
-import requests
-from requests.exceptions import RequestException
+from datetime import timedelta
 
-try:
-    from packaging.version import parse as parse_version
-    ALLOW_VERSION_CHECK = True
-except ImportError:
-    ALLOW_VERSION_CHECK = False
-
+from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.http import Http404, JsonResponse
-from django.utils.translation import ugettext as _
-
-from misago import __version__
-from misago.core.cache import cache
-from misago.threads.models import Post, Thread
+from django.core.cache import cache
+from django.utils import timezone
 
 from . import render
-
+from ...threads.models import Post, Thread, Attachment
+from ...users.models import DataDownload
 
 VERSION_CHECK_CACHE_KEY = "misago_version_check"
 
-UserModel = get_user_model()
+User = get_user_model()
 
 
 def admin_index(request):
-    inactive_users_queryset = UserModel.objects.exclude(
-        requires_activation=UserModel.ACTIVATION_NONE,
-    )
-
-    db_stats = {
-        'threads': Thread.objects.count(),
-        'posts': Post.objects.count(),
-        'users': UserModel.objects.count(),
-        'inactive_users': inactive_users_queryset.count()
+    totals = count_db_items()
+    checks = {
+        "address": check_forum_address(request),
+        "cache": check_cache(),
+        "data_downloads": check_data_downloads(),
+        "debug": check_debug_status(),
+        "https": check_https(request),
+        "inactive_users": check_inactive_users(),
     }
 
     return render(
-        request, 'misago/admin/index.html', {
-            'db_stats': db_stats,
-
-            'allow_version_check': ALLOW_VERSION_CHECK,
-            'version_check': cache.get(VERSION_CHECK_CACHE_KEY),
-        }
+        request,
+        "misago/admin/dashboard/index.html",
+        {"totals": totals, "checks": checks},
     )
 
 
-def check_version(request):
-    if not ALLOW_VERSION_CHECK or request.method != "POST":
-        raise Http404()
+def check_cache():
+    cache.set("misago_cache_test", "ok")
+    return {"is_ok": cache.get("misago_cache_test") == "ok"}
 
-    version = cache.get(VERSION_CHECK_CACHE_KEY, 'nada')
 
-    if version == 'nada':
-        try:
-            api_url = 'https://api.github.com/repos/rafalp/Misago/releases'
-            r = requests.get(api_url)
+def check_debug_status():
+    return {"is_ok": not settings.DEBUG}
 
-            if r.status_code != requests.codes.ok:
-                r.raise_for_status()
 
-            latest_version = r.json()[0]['tag_name']
+def check_https(request):
+    return {"is_ok": request.is_secure()}
 
-            latest = parse_version(latest_version)
-            current = parse_version(__version__)
 
-            if latest > current:
-                version = {
-                    'is_error': True,
-                    'message': _("Outdated: %(current)s! (latest: %(latest)s)") % {
-                        'latest': latest_version,
-                        'current': __version__,
-                    },
-                }
-            else:
-                version = {
-                    'is_error': False,
-                    'message': _("Up to date! (%(current)s)") % {
-                        'current': __version__,
-                    },
-                }
+def check_forum_address(request):
+    set_address = request.settings.forum_address
+    correct_address = request.build_absolute_uri("/")
 
-            cache.set(VERSION_CHECK_CACHE_KEY, version, 180)
-        except (RequestException, IndexError, KeyError, ValueError) as e:
-            version = {
-                'is_error': True,
-                'message': _("Failed to connect to GitHub API. Try again later."),
-            }
+    return {
+        "is_ok": set_address == correct_address,
+        "set_address": set_address,
+        "correct_address": correct_address,
+    }
 
-    return JsonResponse(version)
+
+def check_data_downloads():
+    cutoff = timezone.now() - timedelta(days=3)
+    unprocessed_count = DataDownload.objects.filter(
+        status__lte=DataDownload.STATUS_PROCESSING, requested_on__lte=cutoff
+    ).count()
+
+    return {"is_ok": unprocessed_count == 0, "count": unprocessed_count}
+
+
+def check_inactive_users():
+    count = User.objects.exclude(requires_activation=User.ACTIVATION_NONE).count()
+    return {"is_ok": count <= 10, "count": count}
+
+
+def count_db_items():
+    return {
+        "attachments": Attachment.objects.count(),
+        "threads": Thread.objects.count(),
+        "posts": Post.objects.count(),
+        "users": User.objects.count(),
+    }

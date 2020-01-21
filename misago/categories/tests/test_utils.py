@@ -1,119 +1,91 @@
-from misago.acl.testutils import override_acl
-from misago.categories.models import Category
-from misago.categories.utils import get_categories_tree, get_category_path
-from misago.core import threadstore
-from misago.users.testutils import AuthenticatedUserTestCase
+from unittest.mock import Mock
+
+import pytest
+
+from ..models import Category
+from ..utils import get_categories_tree, get_category_path
 
 
-class CategoriesUtilsTests(AuthenticatedUserTestCase):
-    def setUp(self):
-        """
-        Create categories tree for test cases:
+@pytest.fixture
+def categories_tree(root_category, default_category):
+    Category(name="Category A", slug="category-a").insert_at(
+        root_category, position="last-child", save=True
+    )
+    Category(name="Category E", slug="category-e").insert_at(
+        root_category, position="last-child", save=True
+    )
 
-        First category (created by migration)
+    category_a = Category.objects.get(slug="category-a")
 
-        Category A
-          + Category B
-            + Subcategory C
-            + Subcategory D
+    Category(name="Category B", slug="category-b").insert_at(
+        category_a, position="last-child", save=True
+    )
 
-        Category E
-          + Subcategory F
-        """
+    category_b = Category.objects.get(slug="category-b")
 
-        super(CategoriesUtilsTests, self).setUp()
-        threadstore.clear()
+    category_c = Category(name="Subcategory C", slug="subcategory-c").insert_at(
+        category_b, position="last-child", save=True
+    )
+    category_d = Category(name="Subcategory D", slug="subcategory-d").insert_at(
+        category_b, position="last-child", save=True
+    )
 
-        self.root = Category.objects.root_category()
-        self.first_category = Category.objects.get(slug='first-category')
+    category_e = Category.objects.get(slug="category-e")
+    Category(name="Subcategory F", slug="subcategory-f").insert_at(
+        category_e, position="last-child", save=True
+    )
 
-        Category(
-            name='Category A',
-            slug='category-a',
-        ).insert_at(
-            self.root,
-            position='last-child',
-            save=True,
-        )
-        Category(
-            name='Category E',
-            slug='category-e',
-        ).insert_at(
-            self.root,
-            position='last-child',
-            save=True,
-        )
+    return {
+        "root": root_category,
+        "first": default_category,
+        "a": Category.objects.get(slug="category-a"),
+        "b": Category.objects.get(slug="category-b"),
+        "c": Category.objects.get(slug="subcategory-c"),
+        "d": Category.objects.get(slug="subcategory-d"),
+        "e": Category.objects.get(slug="category-e"),
+        "f": Category.objects.get(slug="subcategory-f"),
+    }
 
-        self.category_a = Category.objects.get(slug='category-a')
 
-        Category(
-            name='Category B',
-            slug='category-b',
-        ).insert_at(
-            self.category_a,
-            position='last-child',
-            save=True,
-        )
+@pytest.fixture
+def full_access_user_acl(categories_tree, user_acl):
+    user_acl = user_acl.copy()
+    categories_acl = {"categories": {}, "visible_categories": []}
+    for category in Category.objects.all_categories():
+        categories_acl["visible_categories"].append(category.id)
+        categories_acl["categories"][category.id] = {"can_see": 1, "can_browse": 1}
+    user_acl.update(categories_acl)
+    return user_acl
 
-        self.category_b = Category.objects.get(slug='category-b')
 
-        Category(
-            name='Subcategory C',
-            slug='subcategory-c',
-        ).insert_at(
-            self.category_b,
-            position='last-child',
-            save=True,
-        )
-        Category(
-            name='Subcategory D',
-            slug='subcategory-d',
-        ).insert_at(
-            self.category_b,
-            position='last-child',
-            save=True,
-        )
+@pytest.fixture
+def request_mock(user, full_access_user_acl, dynamic_settings):
+    return Mock(settings=dynamic_settings, user=user, user_acl=full_access_user_acl)
 
-        self.category_e = Category.objects.get(slug='category-e')
-        Category(
-            name='Subcategory F',
-            slug='subcategory-f',
-        ).insert_at(
-            self.category_e,
-            position='last-child',
-            save=True,
-        )
 
-        categories_acl = {'categories': {}, 'visible_categories': []}
-        for category in Category.objects.all_categories():
-            categories_acl['visible_categories'].append(category.pk)
-            categories_acl['categories'][category.pk] = {'can_see': 1, 'can_browse': 1}
-        override_acl(self.user, categories_acl)
+def test_tree_getter_defaults_to_returning_top_level_categories(
+    request_mock, categories_tree
+):
+    assert get_categories_tree(request_mock) == [
+        categories_tree["first"],
+        categories_tree["a"],
+        categories_tree["e"],
+    ]
 
-    def test_root_categories_tree_no_parent(self):
-        """get_categories_tree returns all children of root nodes"""
-        categories_tree = get_categories_tree(self.user)
-        self.assertEqual(len(categories_tree), 3)
 
-        self.assertEqual(categories_tree[0], Category.objects.get(slug='first-category'))
-        self.assertEqual(categories_tree[1], Category.objects.get(slug='category-a'))
-        self.assertEqual(categories_tree[2], Category.objects.get(slug='category-e'))
+def test_tree_getter_returns_category_subtree(request_mock, categories_tree):
+    assert get_categories_tree(request_mock, categories_tree["a"]) == [
+        categories_tree["b"]
+    ]
 
-    def test_root_categories_tree_with_parent(self):
-        """get_categories_tree returns all children of given node"""
-        categories_tree = get_categories_tree(self.user, self.category_a)
-        self.assertEqual(len(categories_tree), 1)
-        self.assertEqual(categories_tree[0], Category.objects.get(slug='category-b'))
 
-    def test_root_categories_tree_with_leaf(self):
-        """get_categories_tree returns all children of given node"""
-        categories_tree = get_categories_tree(
-            self.user, Category.objects.get(slug='subcategory-f')
-        )
-        self.assertEqual(len(categories_tree), 0)
+def test_tree_getter_returns_empty_list_for_leaf_category(
+    request_mock, categories_tree
+):
+    assert get_categories_tree(request_mock, categories_tree["f"]) == []
 
-    def test_get_category_path(self):
-        """get_categories_tree returns all children of root nodes"""
-        for node in get_categories_tree(self.user):
-            parent_nodes = len(get_category_path(node))
-            self.assertEqual(parent_nodes, node.level)
+
+def test_path_getter_returns_path_to_category(request_mock, categories_tree):
+    for node in get_categories_tree(request_mock):
+        parent_nodes = len(get_category_path(node))
+        assert parent_nodes == node.level

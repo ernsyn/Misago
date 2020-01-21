@@ -1,8 +1,9 @@
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from misago.core import cachebuster
-from misago.users.models import Ban, BanCache
+from ....cache.versions import get_cache_versions
+from ....users import BANS_CACHE
+from ...models import Ban, BanCache
 
 
 class Command(BaseCommand):
@@ -20,7 +21,7 @@ class Command(BaseCommand):
         queryset = queryset.filter(expires_on__lt=timezone.now())
 
         expired_count = queryset.update(is_checked=False)
-        self.stdout.write('Bans invalidated: %s' % expired_count)
+        self.stdout.write("Bans invalidated: %s" % expired_count)
 
     def handle_bans_caches(self):
         queryset = BanCache.objects.filter(expires_on__lt=timezone.now())
@@ -28,10 +29,10 @@ class Command(BaseCommand):
         expired_count = queryset.count()
         queryset.delete()
 
-        bans_version = cachebuster.get_version('misago_bans')
-        queryset = BanCache.objects.filter(bans_version__lt=bans_version)
+        cache_versions = get_cache_versions()
+        queryset = BanCache.objects.exclude(cache_version=cache_versions[BANS_CACHE])
 
         expired_count += queryset.count()
         queryset.delete()
 
-        self.stdout.write('Ban caches emptied: %s' % expired_count)
+        self.stdout.write("Ban caches emptied: %s" % expired_count)

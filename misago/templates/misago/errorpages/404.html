@@ -11,6 +11,7 @@
 
 
 {% block og-title %}{% trans "Page not found" %}{% endblock %}
+{% block twitter-title %}{% trans "Page not found" %}{% endblock %}
 
 
 {% block og-description %}
@@ -18,8 +19,14 @@
 {% endblock %}
 
 
+{% block twitter-description %}
+{% trans "The link you clicked was incorrect or the page has been moved or deleted." %}
+{% endblock %}
+
+
 {% block content %}
 <div class="page page-error page-error-404">
+  <div class="page-header-bg"></div>
   <div class="container">
     <div class="message-panel">
 
